@@ -1,0 +1,84 @@
+name: Package & Release ForeverWatch
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Package version (e.g. v0.1.0)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve package version
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+            IS_TAG="true"
+          elif [[ -n "${{ inputs.version }}" ]]; then
+            TAG="${{ inputs.version }}"
+            IS_TAG="false"
+          else
+            TOC_VER=$(grep -m1 '^## Version:' ForeverWatch.toc | sed 's/^## Version:[[:space:]]*//' | tr -d '\r')
+            TAG="v${TOC_VER:-0.1.0}-dev.${GITHUB_RUN_NUMBER}"
+            IS_TAG="false"
+          fi
+          CLEAN_VER="${TAG#v}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${CLEAN_VER}" >> "$GITHUB_OUTPUT"
+          echo "is_tag=${IS_TAG}" >> "$GITHUB_OUTPUT"
+          echo "zip_name=ForeverWatch-${TAG}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Build WoW AddOn Zip
+        shell: bash
+        run: |
+          STAGE_DIR="build/ForeverWatch"
+          rm -rf build
+          mkdir -p "$STAGE_DIR"
+
+          cp ForeverWatch.toc "$STAGE_DIR/"
+          cp *.lua "$STAGE_DIR/"
+          cp README.md "$STAGE_DIR/"
+
+          # Keep TOC Version in sync with the release tag
+          sed -i "s/^## Version:.*/## Version: ${{ steps.meta.outputs.version }}/" "$STAGE_DIR/ForeverWatch.toc"
+
+          mkdir -p dist
+          (cd build && zip -r "../dist/${{ steps.meta.outputs.zip_name }}" ForeverWatch)
+          ls -lh "dist/${{ steps.meta.outputs.zip_name }}"
+          unzip -l "dist/${{ steps.meta.outputs.zip_name }}"
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ForeverWatch-${{ steps.meta.outputs.tag }}
+          path: dist/${{ steps.meta.outputs.zip_name }}
+
+      - name: Publish GitHub Release
+        if: steps.meta.outputs.is_tag == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+          ZIP="dist/${{ steps.meta.outputs.zip_name }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ZIP" --clobber
+          else
+            gh release create "$TAG" "$ZIP" \
+              --title "ForeverWatch ${TAG}" \
+              --generate-notes
+          fi

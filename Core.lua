@@ -2,7 +2,7 @@ local ADDON_NAME, FW = ...
 _G.ForeverWatch = FW
 local L = FW.L
 
-FW.version = "1.1.0"
+FW.version = "0.1.0"
 FW.prefix = "|cffFFD100[Forever|r|cffFF4444Watch]|r "
 
 -- Selectable crisp tag badge icon styles (HD Forever 16001 atlases & textures)
