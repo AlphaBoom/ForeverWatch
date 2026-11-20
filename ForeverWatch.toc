@@ -1,0 +1,17 @@
+## Interface: 16001
+## Title: |cffFFD100Forever|r|cffFF4444Watch|r
+## Title-zhCN: |cffFFD100Forever|r|cffFF4444Watch|r 敌情监控与玩家标签
+## Title-zhTW: |cffFFD100Forever|r|cffFF4444Watch|r 敵情監控與玩家標籤
+## Notes: Automatically monitors nearby hostile players, tracks danger/nemesis levels, and lets you tag friendly players.
+## Notes-zhCN: 自动监控周围敌对危险人物与仇人并界面预警；支持右键给己方玩家打标签，在Tooltip、聊天栏与姓名板显示。
+## Notes-zhTW: 自動監控周圍敵對危險人物與仇人並介面預警；支援右鍵給己方玩家打標籤，在Tooltip、聊天欄與姓名板顯示。
+## Author: ForeverWatch
+## Version: 1.1.0
+## SavedVariables: ForeverWatchDB
+
+Locale.lua
+Core.lua
+DangerMonitor.lua
+PlayerTags.lua
+DisplayHooks.lua
+ManagerUI.lua
