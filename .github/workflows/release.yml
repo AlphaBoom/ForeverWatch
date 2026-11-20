@@ -51,7 +51,7 @@ jobs:
 
           cp ForeverWatch.toc "$STAGE_DIR/"
           cp *.lua "$STAGE_DIR/"
-          cp README.md "$STAGE_DIR/"
+          cp README*.md "$STAGE_DIR/"
 
           # Keep TOC Version in sync with the release tag
           sed -i "s/^## Version:.*/## Version: ${{ steps.meta.outputs.version }}/" "$STAGE_DIR/ForeverWatch.toc"
