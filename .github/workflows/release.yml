@@ -7,9 +7,14 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Package version (e.g. v0.1.0)"
+        description: "Package version (e.g. v0.2.0)"
         required: false
         default: ""
+      upload_curseforge:
+        description: "Upload to CurseForge (manual dispatch only)"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
@@ -20,8 +25,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Resolve package version
+      - name: Resolve package metadata
         id: meta
         shell: bash
         run: |
@@ -37,26 +44,41 @@ jobs:
             IS_TAG="false"
           fi
           CLEAN_VER="${TAG#v}"
+
+          # Determine CurseForge releaseType from tag suffix
+          LOWER_TAG="${TAG,,}"
+          if [[ "$LOWER_TAG" == *alpha* ]]; then
+            RELEASE_TYPE="alpha"
+          elif [[ "$LOWER_TAG" == *beta* || "$LOWER_TAG" == *rc* ]]; then
+            RELEASE_TYPE="beta"
+          else
+            RELEASE_TYPE="release"
+          fi
+
+          CF_PROJECT_ID=$(grep -m1 '^## X-Curse-Project-ID:' ForeverWatch.toc | sed 's/^## X-Curse-Project-ID:[[:space:]]*//' | tr -d '\r')
+
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${CLEAN_VER}" >> "$GITHUB_OUTPUT"
           echo "is_tag=${IS_TAG}" >> "$GITHUB_OUTPUT"
+          echo "release_type=${RELEASE_TYPE}" >> "$GITHUB_OUTPUT"
+          echo "cf_project_id=${CF_PROJECT_ID}" >> "$GITHUB_OUTPUT"
           echo "zip_name=ForeverWatch-${TAG}.zip" >> "$GITHUB_OUTPUT"
 
       - name: Build WoW AddOn Zip
         shell: bash
         run: |
           STAGE_DIR="build/ForeverWatch"
-          rm -rf build
-          mkdir -p "$STAGE_DIR"
+          rm -rf build dist
+          mkdir -p "$STAGE_DIR" dist
 
           cp ForeverWatch.toc "$STAGE_DIR/"
           cp *.lua "$STAGE_DIR/"
           cp README*.md "$STAGE_DIR/"
 
-          # Keep TOC Version in sync with the release tag
+          # Keep TOC & Core.lua version strings in sync with the release tag
           sed -i "s/^## Version:.*/## Version: ${{ steps.meta.outputs.version }}/" "$STAGE_DIR/ForeverWatch.toc"
+          sed -i "s/^FW\.version = .*/FW.version = \"${{ steps.meta.outputs.version }}\"/" "$STAGE_DIR/Core.lua"
 
-          mkdir -p dist
           (cd build && zip -r "../dist/${{ steps.meta.outputs.zip_name }}" ForeverWatch)
           ls -lh "dist/${{ steps.meta.outputs.zip_name }}"
           unzip -l "dist/${{ steps.meta.outputs.zip_name }}"
@@ -82,3 +104,110 @@ jobs:
               --title "ForeverWatch ${TAG}" \
               --generate-notes
           fi
+
+      - name: Upload to CurseForge
+        if: >-
+          (steps.meta.outputs.is_tag == 'true' || inputs.upload_curseforge == true) &&
+          steps.meta.outputs.cf_project_id != ''
+        env:
+          CF_API_KEY: ${{ secrets.CF_API_KEY }}
+          CF_PROJECT_ID: ${{ steps.meta.outputs.cf_project_id }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          RELEASE_TYPE: ${{ steps.meta.outputs.release_type }}
+          ZIP_PATH: dist/${{ steps.meta.outputs.zip_name }}
+        shell: bash
+        run: |
+          if [[ -z "$CF_API_KEY" ]]; then
+            echo "CF_API_KEY secret is not configured; skipping CurseForge upload."
+            exit 0
+          fi
+
+          python3 - <<'PY'
+          import json, os, re, subprocess, sys, urllib.request, urllib.error
+
+          api_key = os.environ["CF_API_KEY"]
+          project_id = os.environ["CF_PROJECT_ID"]
+          tag = os.environ["RELEASE_TAG"]
+          release_type = os.environ["RELEASE_TYPE"]
+          zip_path = os.environ["ZIP_PATH"]
+
+          # 1. Read ## Interface numbers from ForeverWatch.toc (e.g. 16001 -> "1.60.1")
+          with open("ForeverWatch.toc", "r", encoding="utf-8") as f:
+              toc = f.read()
+          m = re.search(r"^##\s*Interface:\s*(.+)$", toc, re.M)
+          if not m:
+              sys.exit("Could not find ## Interface in ForeverWatch.toc")
+
+          iface_versions = []
+          for raw in m.group(1).split(","):
+              num = raw.strip()
+              if num.isdigit():
+                  v = int(num)
+                  iface_versions.append((v, f"{v // 10000}.{(v % 10000) // 100}.{v % 100}"))
+
+          # 2. Fetch CurseForge WoW game versions and map Interface -> CurseForge version IDs
+          req = urllib.request.Request(
+              "https://wow.curseforge.com/api/game/versions",
+              headers={"X-Api-Token": api_key, "User-Agent": "ForeverWatch-ReleaseAction"},
+          )
+          with urllib.request.urlopen(req, timeout=30) as resp:
+              cf_versions = json.loads(resp.read().decode("utf-8"))
+
+          matched_ids = []
+          for iface_num, ver_str in iface_versions:
+              candidates = [v for v in cf_versions if v.get("name") == ver_str]
+              # For WoW Forever (16xxx), prefer gameVersionTypeID 88568 if multiple flavors match
+              if 16000 <= iface_num < 17000:
+                  forever_match = [v for v in candidates if v.get("gameVersionTypeID") == 88568]
+                  if forever_match:
+                      candidates = forever_match
+              if candidates:
+                  matched_ids.append(candidates[0]["id"])
+                  print(f"Mapped Interface {iface_num} ({ver_str}) -> CurseForge gameVersion ID {candidates[0]['id']} (type {candidates[0].get('gameVersionTypeID')})")
+              else:
+                  print(f"Warning: No CurseForge gameVersion found for {ver_str}")
+
+          if not matched_ids:
+              sys.exit(f"Failed to map any CurseForge gameVersion IDs for {iface_versions}")
+
+          # 3. Build markdown changelog since previous tag
+          prev_tag = ""
+          try:
+              prev_tag = subprocess.check_output(
+                  ["git", "describe", "--tags", "--abbrev=0", f"{tag}^"],
+                  stderr=subprocess.DEVNULL,
+              ).decode("utf-8").strip()
+          except Exception:
+              prev_tag = ""
+
+          log_range = f"{prev_tag}..HEAD" if prev_tag else "HEAD"
+          commits = subprocess.check_output(
+              ["git", "log", log_range, "--pretty=format:- %s (%h)", "-n", "30"]
+          ).decode("utf-8").strip()
+          changelog = f"### ForeverWatch {tag}\n\n{commits}" if commits else f"Release {tag}"
+
+          metadata = {
+              "changelog": changelog,
+              "changelogType": "markdown",
+              "displayName": f"ForeverWatch {tag}",
+              "gameVersions": matched_ids,
+              "releaseType": release_type,
+          }
+
+          # 4. Upload zip via curl multipart/form-data to CurseForge API
+          meta_json = json.dumps(metadata)
+          print("Uploading to CurseForge with metadata:", meta_json)
+          url = f"https://wow.curseforge.com/api/projects/{project_id}/upload-file"
+          out = subprocess.check_output([
+              "curl", "-sS", "-w", "\n%{http_code}",
+              "-X", "POST", url,
+              "-H", f"X-Api-Token: {api_key}",
+              "-F", f"metadata={meta_json}",
+              "-F", f"file=@{zip_path}",
+          ]).decode("utf-8")
+
+          body, code = out.rsplit("\n", 1)
+          print(f"CurseForge HTTP {code}: {body}")
+          if int(code) >= 300:
+              sys.exit(f"CurseForge upload failed with HTTP {code}")
+          PY
