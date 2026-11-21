@@ -19,11 +19,14 @@ ForeverWatch automatically monitors nearby hostile players, escalates threat & n
   - **Lv.5 Nightmare**: 10+ ally kills
   - **Nemesis**: Automatically flagged via `C_DeathRecap` and combat tracking whenever a hostile player kills you (stacks with kill tiers)
 - **Multi-Enemy Stacked Alert Banners**:
-  - Up to 3 simultaneous stacked banners sorted by threat priority (Nemesis always on top)
-  - Overflow summary bar when 4+ hostile threats trigger at once, plus 1.5s sound throttling
+  - Up to 3 simultaneous stacked banners sorted by threat priority (Nemesis always on top), clickable to target the hostile player directly
+  - Overflow summary bar when 4+ hostile threats trigger at once, plus 1.5s sound throttling and adjustable banner duration (`2s–15s`)
 - **Lockable Floating Radar Panel**:
-  - Fixed max height (top 8 highest-threat nearby hostiles + overflow counter) with throttled updates for large-scale PvP clashes
-  - **Lock Mode**: Click the header padlock (or `/fw lock`) to make the panel semi-transparent (adjustable `20%–100%`), click-through, and hide extra header buttons so you never misclick in combat
+  - Fixed max height (top 8 highest-threat nearby hostiles + overflow counter), right-click to target directly (even when locked), adjustable auto-clear timeout (`3s–60s`), and throttled updates for large-scale PvP clashes
+  - **Lock Mode**: Click the header padlock (or `/fw lock`) to make the panel semi-transparent (adjustable `20%–100%`), disable dragging/menus, and keep right-click targeting active
+- **PvP Kill & Death Statistics (`/fw stats`)**:
+  - Tracks hostile players slain and deaths to hostile players (Forever 16001 safe), overall K/D ratio, kill streaks (current & best), session vs. lifetime stats, visual win/loss ratio bar, opponent leaderboard, and chronological combat log
+  - Click any row across **Threats / Nemesis**, **Player Tags**, and **Kill Stats** (or via the radar menu) to open a detailed view with opponent level, class, realm, full notes/tags, and per-opponent encounter history
 
 ### 2. Player Tagging System
 - **Right-Click Context Menus Everywhere**:
@@ -43,6 +46,7 @@ ForeverWatch automatically monitors nearby hostile players, escalates threat & n
 | Command | Description |
 | --- | --- |
 | `/fw` | Open the ForeverWatch Manager & Settings window |
+| `/fw stats` | Open the PvP Kill & Death Statistics tab |
 | `/fw radar` | Show or hide the nearby hostile radar panel |
 | `/fw lock` | Lock or unlock the floating radar panel |
 | `/fw tag [Name]` | Tag current target or specified player |

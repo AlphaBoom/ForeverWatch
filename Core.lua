@@ -2,7 +2,7 @@ local ADDON_NAME, FW = ...
 _G.ForeverWatch = FW
 local L = FW.L
 
-FW.version = "0.1.0"
+FW.version = "0.2.0"
 FW.prefix = "|cffFFD100[Forever|r|cffFF4444Watch]|r "
 
 -- Selectable crisp tag badge icon styles (HD Forever 16001 atlases & textures)
@@ -113,7 +113,9 @@ FW.DEFAULTS = {
         enableMonitor       = true,
         enableSound         = true,
         enableBanner        = true,
+        bannerDuration      = 5,
         enableRadar         = true,
+        radarTimeout        = 18,
         radarLocked         = false,
         radarLockedAlpha    = 0.55,
         radarShowNormalEnemy = false,
@@ -130,14 +132,34 @@ FW.DEFAULTS = {
     enemies = {},      -- [normalizedKey] = enemyRecord
     tags = {},         -- [normalizedKey] = tagRecord
     guidToKey = {},    -- [guid] = normalizedKey
+    pvpStats = {
+        totalKills = 0,
+        totalDeaths = 0,
+        currentStreak = 0,
+        bestStreak = 0,
+        migratedFromEnemies = false,
+        byEnemy = {},  -- [normalizedKey] = { key, name, realm, guid, class, level, kills, deaths, lastZone, lastSeen, lastResult }
+        history = {},  -- newest first, max 100 entries
+    },
 }
 
 -- Runtime caches (not saved)
 FW.shortNameToEnemyKey = {}
 FW.shortNameToTagKey = {}
+FW.shortNameToPvPKey = {}
 FW.nearbyEnemies = {}    -- [key] = live enemy snapshot
+FW.sessionStats = {
+    kills = 0,
+    deaths = 0,
+    currentStreak = 0,
+    bestStreak = 0,
+    startedAt = time(),
+}
 FW.myKey = nil
 FW.myShortName = nil
+FW.myLastNameOrRealm = nil
+FW.mySpaceName = nil
+FW.myGUID = nil
 FW.myRealm = nil
 
 -- ============================================================
@@ -249,6 +271,66 @@ function FW.GetDisplayName(keyOrName)
     return short
 end
 
+function FW.EnsureMyIdentity()
+    if not FW.myGUID then
+        local guid = FW.SafeUnitCall(UnitGUID, "player")
+        if guid and guid ~= "" then
+            FW.myGUID = guid
+        end
+    end
+    if not FW.myKey then
+        local myName, myRealmOrLast = FW.SafeUnitCall(UnitName, "player")
+        if myName and myName ~= "" and myName ~= UNKNOWNOBJECT then
+            local key, shortName, normRealm = FW.NormalizePlayerKey(myName, myRealmOrLast)
+            if key then
+                FW.myKey = key
+                FW.myShortName = shortName
+                FW.myLastNameOrRealm = normRealm
+                if FW.CanAccess(myRealmOrLast) and type(myRealmOrLast) == "string" and myRealmOrLast ~= "" then
+                    FW.mySpaceName = shortName .. " " .. myRealmOrLast
+                end
+            end
+        end
+    end
+    return FW.myKey, FW.myShortName, FW.myGUID
+end
+
+function FW.IsPlayerSelf(unit, infoOrKey, guid)
+    if unit and FW.SafeBool(FW.SafeUnitCall(UnitIsUnit, unit, "player")) then
+        return true
+    end
+    FW.EnsureMyIdentity()
+
+    local checkKey = nil
+    local checkGuid = guid
+    if type(infoOrKey) == "table" then
+        checkKey = infoOrKey.key
+        if not checkGuid then checkGuid = infoOrKey.guid end
+    elseif type(infoOrKey) == "string" then
+        checkKey = infoOrKey
+    end
+
+    if checkGuid and FW.CanAccess(checkGuid) and FW.myGUID and checkGuid == FW.myGUID then
+        return true
+    end
+    if checkKey and FW.CanAccess(checkKey) then
+        if FW.myKey and checkKey == FW.myKey then
+            return true
+        end
+        if FW.mySpaceName and checkKey == FW.mySpaceName then
+            return true
+        end
+        local normKey, short = FW.NormalizePlayerKey(checkKey)
+        if normKey and FW.myKey and normKey == FW.myKey then
+            return true
+        end
+        if FW.mySpaceName and short and short == FW.mySpaceName then
+            return true
+        end
+    end
+    return false
+end
+
 function FW.GetUnitIdentity(unit)
     if not unit or not FW.SafeBool(FW.SafeUnitCall(UnitExists, unit)) then
         return nil
@@ -351,6 +433,7 @@ end
 function FW.RebuildIndexes()
     wipe(FW.shortNameToEnemyKey)
     wipe(FW.shortNameToTagKey)
+    wipe(FW.shortNameToPvPKey)
     if not ForeverWatchDB then return end
 
     for key, rec in pairs(ForeverWatchDB.enemies) do
@@ -377,6 +460,20 @@ function FW.RebuildIndexes()
             ForeverWatchDB.guidToKey[rec.guid] = key
         end
     end
+
+    if ForeverWatchDB.pvpStats and type(ForeverWatchDB.pvpStats.byEnemy) == "table" then
+        for key, rec in pairs(ForeverWatchDB.pvpStats.byEnemy) do
+            local short = FW.GetShortName(key)
+            if short ~= "" then
+                if not FW.shortNameToPvPKey[short] or key == (short .. "-" .. FW.GetMyRealm()) then
+                    FW.shortNameToPvPKey[short] = key
+                end
+            end
+            if rec.guid and rec.guid ~= "" and not ForeverWatchDB.guidToKey[rec.guid] then
+                ForeverWatchDB.guidToKey[rec.guid] = key
+            end
+        end
+    end
 end
 
 function FW.FindEnemyRecord(nameOrKey, guid, explicitRealm)
@@ -388,9 +485,21 @@ function FW.FindEnemyRecord(nameOrKey, guid, explicitRealm)
         end
     end
     if nameOrKey and FW.CanAccess(nameOrKey) then
-        local key, short = FW.NormalizePlayerKey(nameOrKey, explicitRealm)
+        local key, short, realm = FW.NormalizePlayerKey(nameOrKey, explicitRealm)
         if key and ForeverWatchDB.enemies[key] then
             return ForeverWatchDB.enemies[key], key
+        end
+        if type(nameOrKey) == "string" and nameOrKey:find("%s") then
+            local hyphenKey = FW.NormalizePlayerKey(nameOrKey:gsub("%s+", "-"), explicitRealm)
+            if hyphenKey and ForeverWatchDB.enemies[hyphenKey] then
+                return ForeverWatchDB.enemies[hyphenKey], hyphenKey
+            end
+        end
+        if short and realm and realm ~= "" and realm ~= FW.GetMyRealm() then
+            local spaceKey = FW.NormalizePlayerKey(short .. " " .. realm)
+            if spaceKey and ForeverWatchDB.enemies[spaceKey] then
+                return ForeverWatchDB.enemies[spaceKey], spaceKey
+            end
         end
         if short and FW.shortNameToEnemyKey[short] then
             local sk = FW.shortNameToEnemyKey[short]
@@ -411,9 +520,21 @@ function FW.FindTagRecord(nameOrKey, guid, explicitRealm)
         end
     end
     if nameOrKey and FW.CanAccess(nameOrKey) then
-        local key, short = FW.NormalizePlayerKey(nameOrKey, explicitRealm)
+        local key, short, realm = FW.NormalizePlayerKey(nameOrKey, explicitRealm)
         if key and ForeverWatchDB.tags[key] then
             return ForeverWatchDB.tags[key], key
+        end
+        if type(nameOrKey) == "string" and nameOrKey:find("%s") then
+            local hyphenKey = FW.NormalizePlayerKey(nameOrKey:gsub("%s+", "-"), explicitRealm)
+            if hyphenKey and ForeverWatchDB.tags[hyphenKey] then
+                return ForeverWatchDB.tags[hyphenKey], hyphenKey
+            end
+        end
+        if short and realm and realm ~= "" and realm ~= FW.GetMyRealm() then
+            local spaceKey = FW.NormalizePlayerKey(short .. " " .. realm)
+            if spaceKey and ForeverWatchDB.tags[spaceKey] then
+                return ForeverWatchDB.tags[spaceKey], spaceKey
+            end
         end
         if short and FW.shortNameToTagKey[short] then
             local sk = FW.shortNameToTagKey[short]
@@ -423,6 +544,314 @@ function FW.FindTagRecord(nameOrKey, guid, explicitRealm)
         end
     end
     return nil, nil
+end
+
+function FW.GetCurrentZoneText()
+    local z = GetRealZoneText and GetRealZoneText() or ""
+    if not z or z == "" then
+        z = GetZoneText and GetZoneText() or L.UNKNOWN_ZONE
+    end
+    return z
+end
+
+function FW.FormatKDRatio(kills, deaths, decimals)
+    kills = tonumber(kills) or 0
+    deaths = tonumber(deaths) or 0
+    decimals = decimals or 2
+    local fmt = "%." .. tostring(decimals) .. "f"
+    if deaths <= 0 then
+        return string.format(fmt, kills)
+    end
+    return string.format(fmt, kills / deaths)
+end
+
+function FW.FormatLevelText(level)
+    level = tonumber(level) or 0
+    if level > 0 then
+        return string.format("Lv.%d", level)
+    elseif level == -1 then
+        return "Lv.??"
+    end
+    return L.LEVEL_UNKNOWN_SHORT
+end
+
+function FW.GetLocalizedClassName(classFile)
+    if not classFile or classFile == "" then
+        return L.UNKNOWN
+    end
+    if LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[classFile] then
+        return LOCALIZED_CLASS_NAMES_MALE[classFile]
+    end
+    if LOCALIZED_CLASS_NAMES_FEMALE and LOCALIZED_CLASS_NAMES_FEMALE[classFile] then
+        return LOCALIZED_CLASS_NAMES_FEMALE[classFile]
+    end
+    return classFile
+end
+
+function FW.FindPvPEnemyStats(nameOrKey, guid, explicitRealm)
+    if not ForeverWatchDB or not ForeverWatchDB.pvpStats or type(ForeverWatchDB.pvpStats.byEnemy) ~= "table" then
+        return nil, nil
+    end
+    local byEnemy = ForeverWatchDB.pvpStats.byEnemy
+    if guid and FW.CanAccess(guid) then
+        local gKey = ForeverWatchDB.guidToKey[guid]
+        if gKey and byEnemy[gKey] then
+            return byEnemy[gKey], gKey
+        end
+    end
+    if nameOrKey and FW.CanAccess(nameOrKey) then
+        local key, short, realm = FW.NormalizePlayerKey(nameOrKey, explicitRealm)
+        if key and byEnemy[key] then
+            return byEnemy[key], key
+        end
+        if type(nameOrKey) == "string" and nameOrKey:find("%s") then
+            local hyphenKey = FW.NormalizePlayerKey(nameOrKey:gsub("%s+", "-"), explicitRealm)
+            if hyphenKey and byEnemy[hyphenKey] then
+                return byEnemy[hyphenKey], hyphenKey
+            end
+        end
+        if short and realm and realm ~= "" and realm ~= FW.GetMyRealm() then
+            local spaceKey = FW.NormalizePlayerKey(short .. " " .. realm)
+            if spaceKey and byEnemy[spaceKey] then
+                return byEnemy[spaceKey], spaceKey
+            end
+        end
+        if short and FW.shortNameToPvPKey[short] then
+            local sk = FW.shortNameToPvPKey[short]
+            if byEnemy[sk] then
+                return byEnemy[sk], sk
+            end
+        end
+    end
+    return nil, nil
+end
+
+local MAX_PVP_HISTORY = 100
+
+local function EnsurePvPEnemyEntry(snapshot)
+    if not FW.db or not FW.db.pvpStats or not snapshot or not snapshot.key then
+        return nil
+    end
+    local stats = FW.db.pvpStats
+    if type(stats.byEnemy) ~= "table" then stats.byEnemy = {} end
+
+    local rec = stats.byEnemy[snapshot.key]
+    if not rec and snapshot.guid and FW.CanAccess(snapshot.guid) then
+        local existing = FW.FindPvPEnemyStats(nil, snapshot.guid)
+        if existing then rec = existing end
+    end
+    local zone = (snapshot.zone and snapshot.zone ~= "") and snapshot.zone or FW.GetCurrentZoneText()
+    local nowTs = time()
+    if not rec then
+        rec = {
+            key = snapshot.key,
+            name = snapshot.name or FW.GetShortName(snapshot.key),
+            realm = snapshot.realm or FW.GetMyRealm(),
+            guid = snapshot.guid,
+            class = snapshot.class,
+            level = (type(snapshot.level) == "number" and snapshot.level ~= 0) and snapshot.level or 0,
+            kills = 0,
+            deaths = 0,
+            lastZone = zone,
+            firstSeen = nowTs,
+            lastSeen = nowTs,
+            lastResult = "kill",
+        }
+        stats.byEnemy[snapshot.key] = rec
+    else
+        if snapshot.guid and snapshot.guid ~= "" then rec.guid = snapshot.guid end
+        if snapshot.class and snapshot.class ~= "" then rec.class = snapshot.class end
+        if type(snapshot.level) == "number" then
+            if snapshot.level > 0 then
+                rec.level = snapshot.level
+            elseif snapshot.level == -1 and (not rec.level or rec.level == 0) then
+                rec.level = -1
+            end
+        end
+        if not rec.firstSeen then rec.firstSeen = nowTs end
+        rec.lastZone = zone
+        rec.lastSeen = nowTs
+    end
+
+    if rec.guid and rec.guid ~= "" and not FW.db.guidToKey[rec.guid] then
+        FW.db.guidToKey[rec.guid] = rec.key
+    end
+    local short = FW.GetShortName(rec.key)
+    if short ~= "" then
+        FW.shortNameToPvPKey[short] = rec.key
+    end
+    return rec
+end
+
+local function PushPvPHistory(entry)
+    if not FW.db or not FW.db.pvpStats then return end
+    local hist = FW.db.pvpStats.history
+    if type(hist) ~= "table" then
+        hist = {}
+        FW.db.pvpStats.history = hist
+    end
+    table.insert(hist, 1, entry)
+    while #hist > MAX_PVP_HISTORY do
+        table.remove(hist)
+    end
+end
+
+function FW.RecordMyPvPKill(snapshot)
+    if not FW.db or not FW.db.pvpStats or not snapshot or not snapshot.key then return end
+    local stats = FW.db.pvpStats
+    local ses = FW.sessionStats
+
+    stats.totalKills = (stats.totalKills or 0) + 1
+    stats.currentStreak = (stats.currentStreak or 0) + 1
+    if stats.currentStreak > (stats.bestStreak or 0) then
+        stats.bestStreak = stats.currentStreak
+    end
+
+    ses.kills = (ses.kills or 0) + 1
+    ses.currentStreak = (ses.currentStreak or 0) + 1
+    if ses.currentStreak > (ses.bestStreak or 0) then
+        ses.bestStreak = ses.currentStreak
+    end
+
+    local pRec = EnsurePvPEnemyEntry(snapshot)
+    if pRec then
+        pRec.kills = (pRec.kills or 0) + 1
+        pRec.lastResult = "kill"
+    end
+
+    local enemyRec = FW.FindEnemyRecord(snapshot.key, snapshot.guid, snapshot.realm)
+    local wasNemesis = false
+    if enemyRec then
+        enemyRec.myKills = (enemyRec.myKills or 0) + 1
+        wasNemesis = enemyRec.isNemesis == true
+        if snapshot.class and not enemyRec.class then enemyRec.class = snapshot.class end
+    end
+
+    local zone = (snapshot.zone and snapshot.zone ~= "") and snapshot.zone or FW.GetCurrentZoneText()
+    local myLvl = FW.SafeUnitCall(UnitLevel, "player")
+    local snapLvl = (type(snapshot.level) == "number" and snapshot.level ~= 0) and snapshot.level or (pRec and pRec.level) or 0
+    PushPvPHistory({
+        type = "kill",
+        key = pRec and pRec.key or snapshot.key,
+        name = snapshot.name or FW.GetShortName(snapshot.key),
+        class = (pRec and pRec.class) or snapshot.class or (enemyRec and enemyRec.class),
+        level = snapLvl,
+        myLevel = (type(myLvl) == "number" and myLvl > 0) and myLvl or 0,
+        zone = zone,
+        time = time(),
+        wasNemesis = wasNemesis,
+    })
+
+    local dispName = FW.ColorizeName(FW.GetDisplayName(pRec and pRec.key or snapshot.key), (pRec and pRec.class) or snapshot.class)
+    if wasNemesis then
+        FW.Print(string.format(L.PVP_REVENGE_CHAT,
+            FW.GetEnemyIconMarkup(true, 14),
+            dispName,
+            pRec and pRec.kills or 1,
+            pRec and pRec.deaths or (enemyRec and enemyRec.killedMe or 0)))
+    else
+        FW.Print(string.format(L.PVP_KILL_CHAT,
+            FW.GetEnemyIconMarkup(false, 14),
+            dispName,
+            stats.totalKills,
+            stats.totalDeaths or 0,
+            FW.FormatKDRatio(stats.totalKills, stats.totalDeaths or 0, 2)))
+    end
+
+    FW.RefreshAllUI()
+end
+
+function FW.RecordMyPvPDeath(snapshot)
+    if not FW.db or not FW.db.pvpStats then return end
+    local stats = FW.db.pvpStats
+    local ses = FW.sessionStats
+
+    stats.totalDeaths = (stats.totalDeaths or 0) + 1
+    stats.currentStreak = 0
+
+    ses.deaths = (ses.deaths or 0) + 1
+    ses.currentStreak = 0
+
+    local pRec = snapshot and EnsurePvPEnemyEntry(snapshot) or nil
+    if pRec then
+        pRec.deaths = (pRec.deaths or 0) + 1
+        pRec.lastResult = "death"
+    end
+
+    local enemyRec = snapshot and FW.FindEnemyRecord(snapshot.key, snapshot.guid, snapshot.realm) or nil
+    local zone = (snapshot and snapshot.zone and snapshot.zone ~= "") and snapshot.zone or FW.GetCurrentZoneText()
+    local myLvl = FW.SafeUnitCall(UnitLevel, "player")
+    local snapLvl = (snapshot and type(snapshot.level) == "number" and snapshot.level ~= 0) and snapshot.level or (pRec and pRec.level) or 0
+    PushPvPHistory({
+        type = "death",
+        key = (pRec and pRec.key) or (snapshot and snapshot.key) or L.UNKNOWN,
+        name = (snapshot and snapshot.name) or (snapshot and FW.GetShortName(snapshot.key)) or L.UNKNOWN,
+        class = (pRec and pRec.class) or (snapshot and snapshot.class) or (enemyRec and enemyRec.class),
+        level = snapLvl,
+        myLevel = (type(myLvl) == "number" and myLvl > 0) and myLvl or 0,
+        zone = zone,
+        time = time(),
+        wasNemesis = enemyRec and enemyRec.isNemesis == true or false,
+    })
+
+    FW.RefreshAllUI()
+end
+
+function FW.DeletePvPEnemyStats(key)
+    if not key or not FW.db or not FW.db.pvpStats or type(FW.db.pvpStats.byEnemy) ~= "table" then return end
+    local rec = FW.db.pvpStats.byEnemy[key]
+    if not rec then return end
+    FW.db.pvpStats.totalKills = math.max(0, (FW.db.pvpStats.totalKills or 0) - (rec.kills or 0))
+    FW.db.pvpStats.totalDeaths = math.max(0, (FW.db.pvpStats.totalDeaths or 0) - (rec.deaths or 0))
+    FW.db.pvpStats.byEnemy[key] = nil
+    if type(FW.db.pvpStats.history) == "table" then
+        for i = #FW.db.pvpStats.history, 1, -1 do
+            if FW.db.pvpStats.history[i].key == key then
+                table.remove(FW.db.pvpStats.history, i)
+            end
+        end
+    end
+    local enemyRec = FW.db.enemies and FW.db.enemies[key]
+    if enemyRec then
+        enemyRec.myKills = 0
+    end
+    FW.RebuildIndexes()
+    FW.RefreshAllUI()
+end
+
+function FW.ResetSessionPvPStats()
+    FW.sessionStats.kills = 0
+    FW.sessionStats.deaths = 0
+    FW.sessionStats.currentStreak = 0
+    FW.sessionStats.bestStreak = 0
+    FW.sessionStats.startedAt = time()
+    FW.Print(L.PVP_STATS_SESSION_RESET)
+    FW.RefreshAllUI()
+end
+
+function FW.ResetAllPvPStats()
+    if FW.db and FW.db.pvpStats then
+        FW.db.pvpStats.totalKills = 0
+        FW.db.pvpStats.totalDeaths = 0
+        FW.db.pvpStats.currentStreak = 0
+        FW.db.pvpStats.bestStreak = 0
+        FW.db.pvpStats.migratedFromEnemies = true
+        wipe(FW.db.pvpStats.byEnemy)
+        wipe(FW.db.pvpStats.history)
+    end
+    if FW.db and type(FW.db.enemies) == "table" then
+        for _, rec in pairs(FW.db.enemies) do
+            rec.myKills = 0
+        end
+    end
+    FW.sessionStats.kills = 0
+    FW.sessionStats.deaths = 0
+    FW.sessionStats.currentStreak = 0
+    FW.sessionStats.bestStreak = 0
+    FW.sessionStats.startedAt = time()
+    FW.RebuildIndexes()
+    FW.Print(L.PVP_STATS_ALL_RESET)
+    FW.RefreshAllUI()
 end
 
 function FW.FormatTagsInline(tagRec)
@@ -515,6 +944,36 @@ function FW.InitDB()
     if FW.IsDefaultPresetList(FW.settings.presetTags) then
         FW.settings.presetTags = nil
     end
+    -- One-time migration: seed pvpStats from any existing enemy killedMe records
+    if FW.db.pvpStats and not FW.db.pvpStats.migratedFromEnemies then
+        local stats = FW.db.pvpStats
+        if (stats.totalDeaths or 0) == 0 and type(FW.db.enemies) == "table" then
+            for key, rec in pairs(FW.db.enemies) do
+                local km = tonumber(rec.killedMe) or 0
+                local mk = tonumber(rec.myKills) or 0
+                if km > 0 or mk > 0 then
+                    stats.totalDeaths = (stats.totalDeaths or 0) + km
+                    stats.totalKills = (stats.totalKills or 0) + mk
+                    if not stats.byEnemy[key] then
+                        stats.byEnemy[key] = {
+                            key = key,
+                            name = rec.name or FW.GetShortName(key),
+                            realm = rec.realm or FW.GetMyRealm(),
+                            guid = rec.guid,
+                            class = rec.class,
+                            level = rec.level or 0,
+                            kills = mk,
+                            deaths = km,
+                            lastZone = rec.lastZone or L.UNKNOWN_ZONE,
+                            lastSeen = rec.lastSeen or time(),
+                            lastResult = km > 0 and "death" or "kill",
+                        }
+                    end
+                end
+            end
+        end
+        stats.migratedFromEnemies = true
+    end
     FW.RebuildIndexes()
 end
 
@@ -557,6 +1016,10 @@ SlashCmdList["FOREVERWATCH"] = function(msg)
         if FW.ToggleManagerUI then
             FW.ToggleManagerUI()
         end
+    elseif cmd == "stats" or cmd == "kd" or cmd == "pvp" then
+        if FW.ShowManagerUI then
+            FW.ShowManagerUI("stats")
+        end
     elseif cmd == "radar" then
         FW.settings.enableRadar = not FW.settings.enableRadar
         FW.Print(string.format(L.CMD_RADAR_TOGGLED, FW.settings.enableRadar and ("|cff4CFF6B" .. L.ON .. "|r") or ("|cffFF4444" .. L.OFF .. "|r")))
@@ -581,7 +1044,7 @@ SlashCmdList["FOREVERWATCH"] = function(msg)
             return
         end
         local key = FW.NormalizePlayerKey(targetName)
-        if key and key == FW.myKey then
+        if key and FW.IsPlayerSelf(nil, key) then
             FW.Print(L.CMD_SELF_TAG_DENIED)
             return
         end
@@ -630,6 +1093,7 @@ SlashCmdList["FOREVERWATCH"] = function(msg)
     else
         FW.Print(L.CMD_HELP_HEADER)
         FW.Print(L.CMD_HELP_OPEN)
+        FW.Print(L.CMD_HELP_STATS)
         FW.Print(L.CMD_HELP_RADAR)
         FW.Print(L.CMD_HELP_LOCK)
         FW.Print(L.CMD_HELP_TAG)
@@ -651,12 +1115,8 @@ bootFrame:SetScript("OnEvent", function(self, event, arg1)
         FW.InitDB()
     elseif event == "PLAYER_LOGIN" then
         if not FW.db then FW.InitDB() end
-        local myName = FW.SafeUnitCall(UnitName, "player")
-        local myRealm = FW.GetMyRealm()
-        if myName then
-            FW.myShortName = myName
-            FW.myKey = (myRealm ~= "") and (myName .. "-" .. myRealm) or myName
-        end
+        FW.GetMyRealm()
+        FW.EnsureMyIdentity()
         FW.RebuildIndexes()
 
         if FW.InitDangerMonitor then FW.InitDangerMonitor() end

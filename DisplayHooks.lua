@@ -110,8 +110,9 @@ local function OnUnitTooltip(tooltip, data)
 
     local addedAnything = false
 
-    -- 1. Dangerous Enemy / Nemesis Record (for hostile players)
+    -- 1. Dangerous Enemy / Nemesis Record & PvP Kill/Death Record (for hostile players)
     local enemyRec = FW.FindEnemyRecord(info.key, info.guid, info.realm)
+    local pvpRec = FW.FindPvPEnemyStats(info.key, info.guid, info.realm)
     if enemyRec and (info.isEnemy or not info.isFriend) then
         local iconMarkup = FW.GetEnemyIconMarkup(enemyRec.isNemesis, 14)
         DecorateTooltipTitle(tooltip, iconMarkup)
@@ -121,6 +122,10 @@ local function OnUnitTooltip(tooltip, data)
 
         local stats = string.format(L.TT_ENEMY_STATS,
             enemyRec.attacks or 0, enemyRec.kills or 0)
+        local myKills = math.max(enemyRec.myKills or 0, pvpRec and pvpRec.kills or 0)
+        if myKills > 0 then
+            stats = stats .. string.format(L.TT_ENEMY_MY_KILLS, myKills)
+        end
         if (enemyRec.killedMe or 0) > 0 then
             stats = stats .. string.format(L.TT_ENEMY_KILLED_ME, enemyRec.killedMe)
         end
@@ -132,6 +137,10 @@ local function OnUnitTooltip(tooltip, data)
         if enemyRec.note and enemyRec.note ~= "" then
             tooltip:AddLine(string.format(L.TT_NOTE_FMT, enemyRec.note), 0.92, 0.92, 0.95, true)
         end
+        addedAnything = true
+    elseif pvpRec and (info.isEnemy or not info.isFriend) and ((pvpRec.kills or 0) > 0 or (pvpRec.deaths or 0) > 0) then
+        tooltip:AddLine(" ")
+        tooltip:AddLine(string.format(L.TT_PVP_RECORD, FW.GetEnemyIconMarkup(false, 14), pvpRec.kills or 0, pvpRec.deaths or 0), 1, 1, 1)
         addedAnything = true
     end
 

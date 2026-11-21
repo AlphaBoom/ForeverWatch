@@ -24,7 +24,7 @@ end
 
 function FW.SavePlayerTag(key, tagsList, note, colorId, guid, classFile)
     if not key or key == "" then return end
-    if FW.myKey and key == FW.myKey then
+    if FW.IsPlayerSelf(nil, key, guid) then
         FW.Print(L.CMD_SELF_TAG_DENIED)
         return
     end
@@ -365,7 +365,7 @@ function FW.OpenTagDialog(playerKey, guid, classFile)
     if not playerKey or playerKey == "" then return end
     local key = FW.NormalizePlayerKey(playerKey)
     if not key then return end
-    if FW.myKey and key == FW.myKey then
+    if FW.IsPlayerSelf(nil, key, guid) then
         FW.Print(L.CMD_SELF_TAG_DENIED)
         return
     end
@@ -402,17 +402,11 @@ end
 -- ============================================================
 
 local function IsSelfIdentity(unit, guid, key, short, realm)
-    if unit and FW.SafeBool(FW.SafeUnitCall(UnitIsUnit, unit, "player")) then
+    if FW.IsPlayerSelf(unit, key, guid) then
         return true
     end
-    local myGuid = FW.SafeUnitCall(UnitGUID, "player")
-    if guid and myGuid and guid == myGuid then
-        return true
-    end
-    if key and FW.myKey and key == FW.myKey then
-        return true
-    end
-    if short and FW.myShortName and short == FW.myShortName and (not realm or realm == "" or realm == FW.GetMyRealm()) then
+    if short and FW.myShortName and short == FW.myShortName
+        and (not realm or realm == "" or realm == FW.myLastNameOrRealm or (not FW.mySpaceName and realm == FW.GetMyRealm())) then
         return true
     end
     return false
