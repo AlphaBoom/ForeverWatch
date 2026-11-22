@@ -19,6 +19,7 @@ local lastSoundPriority = 0
 
 local radarFrame
 local radarRows = {}
+local radarSecureBtns = {}
 local MAX_RADAR_ROWS = 8
 local MAX_LIVE_ENEMIES = 160
 local radarRefreshPending = false
@@ -42,24 +43,48 @@ local function IsFriendlyPlayerUnit(unit)
     return FW.SafeBool(FW.SafeUnitCall(UnitIsFriend, "player", unit))
 end
 
+local function IsInFFAArenaZone()
+    if GetZonePVPInfo then
+        local ok, pvpType = pcall(GetZonePVPInfo)
+        if ok and pvpType == "arena" then
+            return true
+        end
+    end
+    return false
+end
+
 local function IsEnemyPlayerUnit(unit)
     if not unit then return false end
     if not FW.SafeBool(FW.SafeUnitCall(UnitExists, unit)) then return false end
     if not FW.SafeBool(FW.SafeUnitCall(UnitIsPlayer, unit)) then return false end
-    return FW.SafeBool(FW.SafeUnitCall(UnitIsEnemy, "player", unit))
+    if not FW.SafeBool(FW.SafeUnitCall(UnitIsEnemy, "player", unit)) then return false end
+    -- Never treat own party/raid teammates as hostile players (prevents Mind Control false positives)
+    if UnitInParty and FW.SafeBool(FW.SafeUnitCall(UnitInParty, unit)) then return false end
+    if UnitInRaid and FW.SafeBool(FW.SafeUnitCall(UnitInRaid, unit)) then return false end
+    -- In pure World-PvP mode, ignore same-faction enemies outside FFA Arena zones & PvP instances (duels, open-world MC)
+    if FW.settings and not FW.settings.monitorNonWorldPvP and not IsInFFAArenaZone() and not FW.IsInPvPInstance() then
+        local myFaction = FW.SafeUnitCall(UnitFactionGroup, "player")
+        local uFaction = FW.SafeUnitCall(UnitFactionGroup, unit)
+        if myFaction and uFaction and myFaction == uFaction then
+            return false
+        end
+    end
+    return true
 end
 
 local function IsUnitDeadSafe(unit)
     return FW.SafeBool(FW.SafeUnitCall(UnitIsDeadOrGhost, unit))
 end
 
-local function IsEnemyDeadSafe(unit)
+local function IsUnitReallyDeadSafe(unit)
     if not IsUnitDeadSafe(unit) then return false end
     if UnitIsFeignDeath and FW.SafeBool(FW.SafeUnitCall(UnitIsFeignDeath, unit)) then
         return false
     end
     return true
 end
+
+local IsEnemyDeadSafe = IsUnitReallyDeadSafe
 
 local function GetUnitHealthSafe(unit)
     local hp = FW.SafeUnitCall(UnitHealth, unit)
@@ -320,6 +345,23 @@ local function LayoutAlertBanners()
         alertOverflowBar:Hide()
     end
 
+    SyncAlertClickButtons()
+end
+
+local function ClearAllAlertBanners()
+    for i = 1, #alertBanners do
+        local b = alertBanners[i]
+        if b then
+            b.isHovered = false
+            if b.hoverGlow then b.hoverGlow:Hide() end
+            b:Hide()
+            b.priority = 0
+            b.enemyKey = nil
+            b.targetMacro = ""
+        end
+    end
+    wipe(overflowEnemies)
+    if alertOverflowBar then alertOverflowBar:Hide() end
     SyncAlertClickButtons()
 end
 
@@ -706,6 +748,7 @@ local function NoteRecentAttacker(victimKey, victimName, enemySnap, reason)
 end
 
 local function TriggerProximityCheck(snap)
+    if not FW.IsMonitorActive() then return end
     if not snap or not snap.key then return end
     local rec = FW.FindEnemyRecord(snap.key, snap.guid, snap.realm)
     if not rec then return end
@@ -737,7 +780,7 @@ local function InspectFriendlyUnit(unit)
     if not info then return nil end
 
     local now = GetTime()
-    local dead = IsUnitDeadSafe(unit)
+    local dead = IsUnitReallyDeadSafe(unit)
     local hp = GetUnitHealthSafe(unit)
     local prev = friendlyState[info.key]
     local isSelf = FW.IsPlayerSelf(unit, info)
@@ -818,6 +861,7 @@ local function MarkEnemyEngagedByMe(snap, now)
 end
 
 local function CreditEnemyKill(snap)
+    if not FW.IsMonitorActive() then return end
     if not snap or not snap.key then return end
     if FW.IsPlayerSelf(nil, snap.key, snap.guid) then return end
     local now = GetTime()
@@ -862,10 +906,42 @@ local function InspectEnemyUnit(unit)
     if not info then return nil end
 
     local now = GetTime()
+    local prev = liveEnemies[info.key]
+    local isDirectUnit = (unit == "target" or unit == "mouseover" or unit == "focus")
+    local discoveredDirect = isDirectUnit or (prev and prev.discoveredDirect) or false
+
+    local resolvedLevel = 0
+    if info.level and info.level > 0 then
+        resolvedLevel = info.level
+    elseif prev and prev.level and prev.level > 0 then
+        resolvedLevel = prev.level
+    elseif info.level == -1 or (prev and prev.level == -1) then
+        resolvedLevel = -1
+    end
+
+    -- Battleground/Arena Radar-Only mode: record nearby/targeted/mouseover hostile for radar display ONLY (no auto-marking, alerts, or K/D stats)
+    if not FW.IsMonitorActive() then
+        local snap = {
+            key = info.key,
+            name = info.name,
+            realm = info.realm,
+            guid = info.guid or (prev and prev.guid),
+            class = info.class or (prev and prev.class),
+            level = resolvedLevel,
+            unit = unit,
+            lastSeen = now,
+            inCombat = false,
+            discoveredDirect = discoveredDirect,
+            zone = GetZoneTextSafe(),
+        }
+        liveEnemies[info.key] = snap
+        FW.nearbyEnemies = liveEnemies
+        return snap
+    end
+
     local inCombat = FW.SafeBool(FW.SafeUnitCall(UnitAffectingCombat, unit))
     local dead = IsEnemyDeadSafe(unit)
     local hp = GetUnitHealthSafe(unit)
-    local prev = liveEnemies[info.key]
     local prevState = enemyCombatState[info.key]
 
     local hpDropped = false
@@ -897,15 +973,6 @@ local function InspectEnemyUnit(unit)
         lastTargetedMe = now
     end
 
-    local resolvedLevel = 0
-    if info.level and info.level > 0 then
-        resolvedLevel = info.level
-    elseif prev and prev.level and prev.level > 0 then
-        resolvedLevel = prev.level
-    elseif info.level == -1 or (prev and prev.level == -1) then
-        resolvedLevel = -1
-    end
-
     local snap = {
         key = info.key,
         name = info.name,
@@ -920,6 +987,7 @@ local function InspectEnemyUnit(unit)
         targetName = targetInfo and targetInfo.name or nil,
         targetSince = targetSince,
         lastTargetedMe = lastTargetedMe,
+        discoveredDirect = discoveredDirect,
         zone = GetZoneTextSafe(),
     }
     liveEnemies[info.key] = snap
@@ -933,11 +1001,13 @@ local function InspectEnemyUnit(unit)
         local isPetTarget = unit == "pettarget" and FW.SafeBool(FW.SafeUnitCall(UnitAffectingCombat, "pet"))
         local attackedMeRecently = FW.myKey and recentAttackers[FW.myKey] and recentAttackers[FW.myKey][info.key]
             and (now - recentAttackers[FW.myKey][info.key].time) <= 14
+        local enemyTargetingNPC = FW.SafeBool(FW.SafeUnitCall(UnitExists, targetUnit))
+            and not FW.SafeBool(FW.SafeUnitCall(UnitIsPlayer, targetUnit))
 
         if (inCombat and targetIsSelf)
             or attackedMeRecently
             or isPetTarget
-            or (playerInCombat and isMyTarget and (hpDropped or inCombat))
+            or (playerInCombat and isMyTarget and hpDropped and not enemyTargetingNPC)
         then
             lastEngagedByMe = now
         end
@@ -978,29 +1048,35 @@ local function InspectEnemyUnit(unit)
 end
 
 local function ScanUnitAndTarget(unit)
-    if not unit then return end
+    if not unit then return false end
     if IsEnemyPlayerUnit(unit) then
-        InspectEnemyUnit(unit)
+        return InspectEnemyUnit(unit) ~= nil
     elseif IsFriendlyPlayerUnit(unit) then
-        InspectFriendlyUnit(unit)
+        if FW.IsMonitorActive() then
+            InspectFriendlyUnit(unit)
+        end
         local t = unit .. "target"
         if IsEnemyPlayerUnit(t) then
-            InspectEnemyUnit(t)
+            return InspectEnemyUnit(t) ~= nil
         end
     end
+    return false
 end
 
 local function ScanAllNearbyUnits()
-    if not FW.settings or not FW.settings.enableMonitor then return end
+    if not FW.IsRadarScanActive() then return end
 
     local now = GetTime()
+    local fullMonitor = FW.IsMonitorActive()
 
     -- Scan player, target, focus, mouseover, pettarget
-    InspectFriendlyUnit("player")
+    if fullMonitor then
+        InspectFriendlyUnit("player")
+    end
     ScanUnitAndTarget("target")
     ScanUnitAndTarget("focus")
     ScanUnitAndTarget("mouseover")
-    if IsEnemyPlayerUnit("pettarget") then
+    if fullMonitor and IsEnemyPlayerUnit("pettarget") then
         InspectEnemyUnit("pettarget")
     end
 
@@ -1216,7 +1292,7 @@ end
 
 -- Handle PLAYER_DEAD via C_DeathRecap + recentAttackers fallback
 local function HandlePlayerDeath(retryCount)
-    if not FW.settings or not FW.settings.enableMonitor then return end
+    if not FW.IsMonitorActive() then return end
     retryCount = tonumber(retryCount) or 0
     FW.EnsureMyIdentity()
 
@@ -1242,6 +1318,7 @@ local function HandlePlayerDeath(retryCount)
         end
     end
 
+    local sawVerifiedNonPlayerDamage = false
     if recapEvents then
         local fatalSnap = nil
         local bestSnap = nil
@@ -1268,6 +1345,13 @@ local function HandlePlayerDeath(retryCount)
                             bestSnap = matchedSnap
                             bestTimestamp = ts
                         end
+                    else
+                        local srcGuid = FW.CanAccess(ev.sourceGUID) and type(ev.sourceGUID) == "string" and ev.sourceGUID or nil
+                        local isEnv = FW.CanAccess(evType) and type(evType) == "string" and evType:find("ENVIRONMENTAL") ~= nil
+                        local isMob = srcGuid and (srcGuid:match("^Creature%-") or srcGuid:match("^Vehicle%-"))
+                        if isEnv or isMob then
+                            sawVerifiedNonPlayerDamage = true
+                        end
                     end
                 end
             end
@@ -1277,6 +1361,12 @@ local function HandlePlayerDeath(retryCount)
         if chosen then
             killers[chosen.key] = chosen
         end
+    end
+
+    -- If DeathRecap confirmed non-player (mob/environmental) damage with ZERO hostile player damage, it is a PvE death
+    if not next(killers) and sawVerifiedNonPlayerDamage then
+        lastMyDeathHandled = now
+        return
     end
 
     -- Method 2: Fallback to recent confirmed enemy attackers of "player"
@@ -1381,12 +1471,116 @@ local function OpenRadarRowMenu(anchor, entry)
     end)
 end
 
+local function NormalizeRadarTopAnchor(f)
+    if not f then return end
+    local left = f:GetLeft()
+    local top = f:GetTop()
+    local uiTop = UIParent and UIParent:GetTop()
+    if left and top and uiTop then
+        local x = math.floor(left + 0.5)
+        local y = math.floor((top - uiTop) + 0.5)
+        f:ClearAllPoints()
+        f:SetPoint("TOPLEFT", UIParent, "TOPLEFT", x, y)
+        if FW.settings then
+            FW.settings.radarPoint = { "TOPLEFT", "TOPLEFT", x, y }
+        end
+    end
+end
+
+local function SyncRadarSecureButtons()
+    if not radarFrame then return end
+    if InCombatLockdown and InCombatLockdown() then
+        pendingRadarCombatRefresh = true
+        return
+    end
+    local uiTop = UIParent and UIParent:GetTop()
+    local frameShown = radarFrame:IsShown() and not (FW.settings and FW.settings.radarCollapsed)
+    for i = 1, MAX_RADAR_ROWS do
+        local row = radarRows[i]
+        local sbtn = radarSecureBtns[i]
+        if sbtn then
+            if frameShown and row and row:IsShown() and row.entry and uiTop then
+                local left = row:GetLeft()
+                local top = row:GetTop()
+                if left and top then
+                    sbtn:ClearAllPoints()
+                    sbtn:SetPoint("TOPLEFT", UIParent, "TOPLEFT", left, top - uiTop)
+                    sbtn:SetSize(row:GetWidth(), row:GetHeight())
+                    sbtn:SetAttribute("type2", "macro")
+                    sbtn:SetAttribute("macrotext2", BuildTargetMacro(row.entry))
+                    sbtn.boundKey = row.entry.key
+                    sbtn:Show()
+                else
+                    sbtn:SetAttribute("macrotext2", "")
+                    sbtn.boundKey = nil
+                    sbtn:Hide()
+                end
+            else
+                sbtn:SetAttribute("macrotext2", "")
+                sbtn.boundKey = nil
+                sbtn:Hide()
+                if row and row.hl then row.hl:Hide() end
+            end
+        end
+    end
+end
+
+local function ShowRadarRowTooltip(owner, e)
+    if not e then return end
+    GameTooltip:SetOwner(owner, "ANCHOR_LEFT")
+    GameTooltip:ClearLines()
+    GameTooltip:AddLine(FW.ColorizeName(FW.GetFullName(e.key), e.class))
+    if e.rec then
+        GameTooltip:AddLine(string.format(L.RADAR_TT_STATUS, FW.GetDangerLabel(e.rec)), 1, 1, 1)
+        GameTooltip:AddLine(string.format(L.RADAR_TT_STATS, e.rec.attacks or 0, e.rec.kills or 0), 0.9, 0.9, 0.9)
+        if (e.rec.killedMe or 0) > 0 then
+            GameTooltip:AddLine(string.format(L.RADAR_TT_KILLED_ME, e.rec.killedMe), 0.95, 0.35, 1)
+        end
+        local pvpRec = FW.FindPvPEnemyStats(e.key, e.snap and e.snap.guid)
+        local myKills = math.max(e.rec.myKills or 0, pvpRec and pvpRec.kills or 0)
+        if myKills > 0 then
+            GameTooltip:AddLine(string.format(L.RADAR_TT_MY_KILLS, myKills), 0.30, 1.00, 0.42)
+        end
+        if e.rec.lastEvent and e.rec.lastEvent ~= "" then
+            GameTooltip:AddLine(string.format(L.RADAR_TT_RECENT, e.rec.lastEvent), 1, 0.82, 0)
+        end
+        if e.rec.note and e.rec.note ~= "" then
+            GameTooltip:AddLine(string.format(L.RADAR_TT_NOTE, e.rec.note), 0.85, 0.85, 0.85, true)
+        end
+    else
+        GameTooltip:AddLine(L.RADAR_TT_NORMAL, 0.8, 0.8, 0.8)
+        local pvpRec = FW.FindPvPEnemyStats(e.key, e.snap and e.snap.guid)
+        if pvpRec and ((pvpRec.kills or 0) > 0 or (pvpRec.deaths or 0) > 0) then
+            GameTooltip:AddLine(string.format(L.TT_PVP_RECORD, FW.GetEnemyIconMarkup(false, 13), pvpRec.kills or 0, pvpRec.deaths or 0), 1, 1, 1)
+        end
+    end
+    local tagRec = FW.FindTagRecord(e.key, e.snap and e.snap.guid)
+    if tagRec then
+        local cInfo = FW.GetTagColorInfo(tagRec.color)
+        local tagStr = FW.FormatTagsInline(tagRec)
+        if tagStr ~= "" then
+            GameTooltip:AddLine(string.format(L.TT_TAGS_FMT, FW.GetTagIconMarkup(14), cInfo.hex, "[" .. tagStr .. "]"), 1, 1, 1, true)
+        end
+        if tagRec.note and tagRec.note ~= "" then
+            GameTooltip:AddLine(string.format(L.TT_NOTE_FMT, tagRec.note), 0.9, 0.9, 0.9, true)
+        end
+    end
+    GameTooltip:AddLine(L.RADAR_TT_RCLICK, 0.55, 0.55, 0.55)
+    GameTooltip:Show()
+end
+
 local function CreateRadarFrame()
     local f = CreateFrame("Frame", "ForeverWatchRadarFrame", UIParent, "BackdropTemplate")
-    f:SetSize(244, 38)
+    f:SetSize(256, 38)
     if FW.settings.radarPoint then
         local p = FW.settings.radarPoint
         f:SetPoint(p[1], UIParent, p[2], p[3], p[4])
+        if not tostring(p[1] or ""):match("^TOP") then
+            C_Timer.After(0, function()
+                NormalizeRadarTopAnchor(f)
+                SyncRadarSecureButtons()
+            end)
+        end
     else
         f:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -24, -220)
     end
@@ -1398,12 +1592,15 @@ local function CreateRadarFrame()
     f:SetScript("OnDragStart", function(self)
         if FW.settings and FW.settings.radarLocked then return end
         if InCombatLockdown and InCombatLockdown() then return end
+        for i = 1, MAX_RADAR_ROWS do
+            if radarSecureBtns[i] then radarSecureBtns[i]:Hide() end
+        end
         self:StartMoving()
     end)
     f:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
-        local p1, _, p2, x, y = self:GetPoint()
-        FW.settings.radarPoint = { p1, p2, math.floor(x + 0.5), math.floor(y + 0.5) }
+        NormalizeRadarTopAnchor(self)
+        SyncRadarSecureButtons()
     end)
 
     f:SetBackdrop({
@@ -1550,9 +1747,10 @@ local function CreateRadarFrame()
     moreText:Hide()
     f.moreText = moreText
 
-    -- Pre-create secure row buttons (Right-click targets even when locked; Left-click opens menu when unlocked)
+    -- Pre-create non-secure visual row buttons (so rows can Show/Hide/resize freely even during combat!)
+    -- Plus sibling SecureActionButton overlays parented to UIParent for right-click targeting
     for i = 1, MAX_RADAR_ROWS do
-        local row = CreateFrame("Button", "ForeverWatchRadarRow" .. i, f, "SecureActionButtonTemplate, BackdropTemplate")
+        local row = CreateFrame("Button", "ForeverWatchRadarRow" .. i, f, "BackdropTemplate")
         row:SetHeight(22)
         row:SetPoint("TOPLEFT", header, "BOTTOMLEFT", 2, -4 - (i - 1) * 23)
         row:SetPoint("TOPRIGHT", header, "BOTTOMRIGHT", -2, -4 - (i - 1) * 23)
@@ -1560,82 +1758,41 @@ local function CreateRadarFrame()
         row:SetBackdropColor(0.12, 0.12, 0.15, 0.72)
         row:EnableMouse(true)
         row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-        row:SetAttribute("useOnKeyDown", false)
-        row:SetAttribute("type2", "macro")
-        row:SetAttribute("macrotext2", "")
 
-        local hl = row:CreateTexture(nil, "HIGHLIGHT")
+        local hl = row:CreateTexture(nil, "ARTWORK")
         hl:SetAllPoints()
         hl:SetTexture("Interface\\QuestFrame\\UI-QuestLogTitleHighlight")
         hl:SetBlendMode("ADD")
         hl:SetAlpha(0.45)
+        hl:Hide()
+        row.hl = hl
 
         local icon = row:CreateTexture(nil, "OVERLAY")
         icon:SetSize(14, 14)
         icon:SetPoint("LEFT", row, "LEFT", 5, 0)
         row.icon = icon
 
-        local nameText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        nameText:SetPoint("LEFT", icon, "RIGHT", 5, 0)
-        nameText:SetWidth(128)
-        nameText:SetJustifyH("LEFT")
-        nameText:SetWordWrap(false)
-        row.nameText = nameText
-
         local statusText = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
         statusText:SetPoint("RIGHT", row, "RIGHT", -6, 0)
         statusText:SetJustifyH("RIGHT")
         row.statusText = statusText
 
+        local nameText = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        nameText:SetPoint("LEFT", icon, "RIGHT", 5, 0)
+        nameText:SetPoint("RIGHT", statusText, "LEFT", -6, 0)
+        nameText:SetJustifyH("LEFT")
+        nameText:SetWordWrap(false)
+        row.nameText = nameText
+
         row:SetScript("OnEnter", function(self)
-            local e = self.entry
-            if not e then return end
-            GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-            GameTooltip:ClearLines()
-            GameTooltip:AddLine(FW.ColorizeName(FW.GetDisplayName(e.key), e.class))
-            if e.rec then
-                GameTooltip:AddLine(string.format(L.RADAR_TT_STATUS, FW.GetDangerLabel(e.rec)), 1, 1, 1)
-                GameTooltip:AddLine(string.format(L.RADAR_TT_STATS, e.rec.attacks or 0, e.rec.kills or 0), 0.9, 0.9, 0.9)
-                if (e.rec.killedMe or 0) > 0 then
-                    GameTooltip:AddLine(string.format(L.RADAR_TT_KILLED_ME, e.rec.killedMe), 0.95, 0.35, 1)
-                end
-                local pvpRec = FW.FindPvPEnemyStats(e.key, e.snap and e.snap.guid)
-                local myKills = math.max(e.rec.myKills or 0, pvpRec and pvpRec.kills or 0)
-                if myKills > 0 then
-                    GameTooltip:AddLine(string.format(L.RADAR_TT_MY_KILLS, myKills), 0.30, 1.00, 0.42)
-                end
-                if e.rec.lastEvent and e.rec.lastEvent ~= "" then
-                    GameTooltip:AddLine(string.format(L.RADAR_TT_RECENT, e.rec.lastEvent), 1, 0.82, 0)
-                end
-                if e.rec.note and e.rec.note ~= "" then
-                    GameTooltip:AddLine(string.format(L.RADAR_TT_NOTE, e.rec.note), 0.85, 0.85, 0.85, true)
-                end
-            else
-                GameTooltip:AddLine(L.RADAR_TT_NORMAL, 0.8, 0.8, 0.8)
-                local pvpRec = FW.FindPvPEnemyStats(e.key, e.snap and e.snap.guid)
-                if pvpRec and ((pvpRec.kills or 0) > 0 or (pvpRec.deaths or 0) > 0) then
-                    GameTooltip:AddLine(string.format(L.TT_PVP_RECORD, FW.GetEnemyIconMarkup(false, 13), pvpRec.kills or 0, pvpRec.deaths or 0), 1, 1, 1)
-                end
-            end
-            local tagRec = FW.FindTagRecord(e.key, e.snap and e.snap.guid)
-            if tagRec then
-                local cInfo = FW.GetTagColorInfo(tagRec.color)
-                local tagStr = FW.FormatTagsInline(tagRec)
-                if tagStr ~= "" then
-                    GameTooltip:AddLine(string.format(L.TT_TAGS_FMT, FW.GetTagIconMarkup(14), cInfo.hex, "[" .. tagStr .. "]"), 1, 1, 1, true)
-                end
-                if tagRec.note and tagRec.note ~= "" then
-                    GameTooltip:AddLine(string.format(L.TT_NOTE_FMT, tagRec.note), 0.9, 0.9, 0.9, true)
-                end
-            end
-            GameTooltip:AddLine(L.RADAR_TT_RCLICK, 0.55, 0.55, 0.55)
-            GameTooltip:Show()
+            if self.hl then self.hl:Show() end
+            ShowRadarRowTooltip(self, self.entry)
         end)
-        row:SetScript("OnLeave", function()
+        row:SetScript("OnLeave", function(self)
+            if self.hl then self.hl:Hide() end
             GameTooltip:Hide()
         end)
-        -- Use PostClick so SecureActionButtonTemplate's built-in OnClick is preserved for RightButton targeting
-        row:SetScript("PostClick", function(self, button)
+        row:SetScript("OnClick", function(self, button)
             if button == "LeftButton" and self.entry and not (FW.settings and FW.settings.radarLocked) then
                 OpenRadarRowMenu(self, self.entry)
             end
@@ -1643,6 +1800,37 @@ local function CreateRadarFrame()
 
         row:Hide()
         radarRows[i] = row
+
+        -- Sibling SecureActionButtonTemplate overlay parented to UIParent (keeps radarFrame 100% combat-resizable)
+        local sbtn = CreateFrame("Button", "ForeverWatchRadarClick" .. i, UIParent, "SecureActionButtonTemplate")
+        sbtn:SetSize(246, 22)
+        sbtn:SetFrameStrata("MEDIUM")
+        sbtn:SetFrameLevel((f:GetFrameLevel() or 1) + 12)
+        sbtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        sbtn:SetAttribute("useOnKeyDown", false)
+        sbtn:SetAttribute("type2", "macro")
+        sbtn:SetAttribute("macrotext2", "")
+        sbtn.visualRow = row
+        sbtn:SetScript("OnEnter", function(self)
+            local r = self.visualRow
+            if r and r:IsShown() and r.entry then
+                if r.hl then r.hl:Show() end
+                ShowRadarRowTooltip(self, r.entry)
+            end
+        end)
+        sbtn:SetScript("OnLeave", function(self)
+            local r = self.visualRow
+            if r and r.hl then r.hl:Hide() end
+            GameTooltip:Hide()
+        end)
+        sbtn:SetScript("PostClick", function(self, button)
+            local r = self.visualRow
+            if button == "LeftButton" and r and r.entry and not (FW.settings and FW.settings.radarLocked) then
+                OpenRadarRowMenu(r, r.entry)
+            end
+        end)
+        sbtn:Hide()
+        radarSecureBtns[i] = sbtn
     end
 
     return f
@@ -1680,23 +1868,16 @@ function FW.ApplyRadarLockState()
     if lockedAlpha < 0.2 then lockedAlpha = 0.2 elseif lockedAlpha > 1.0 then lockedAlpha = 1.0 end
 
     radarFrame:SetAlpha(locked and lockedAlpha or 1.0)
-
-    if InCombatLockdown and InCombatLockdown() then
-        pendingRadarCombatRefresh = true
-        return
-    end
-
     radarFrame:SetMovable(not locked)
     radarFrame:EnableMouse(not locked)
 
-    -- Keep radar rows mouse-enabled even when locked so right-click targeting always works
     for i = 1, MAX_RADAR_ROWS do
         if radarRows[i] then
             radarRows[i]:EnableMouse(true)
         end
     end
 
-    -- When locked, hide/disable Gear & Collapse; keep Lock button and row right-click targeting active
+    -- When locked, hide/disable Gear & Collapse; keep Lock button and row targeting active
     if radarFrame.btnMgr then
         radarFrame.btnMgr:EnableMouse(not locked)
         radarFrame.btnMgr:SetShown(not locked)
@@ -1729,7 +1910,7 @@ function FW.ApplyRadarLockState()
 end
 
 function FW.ScheduleRadarRefresh()
-    if not radarFrame or not FW.settings or not FW.settings.enableRadar then return end
+    if not radarFrame or not FW.settings or not FW.settings.enableRadar or FW.IsRadarSuppressed() then return end
     local now = GetTime()
     if (now - lastRadarRefresh) >= 0.25 then
         FW.RefreshRadar()
@@ -1749,25 +1930,31 @@ function FW.RefreshRadar()
     lastRadarRefresh = GetTime()
     FW.ApplyRadarLockState()
 
+    local suppressed = FW.IsRadarSuppressed()
+    if suppressed then
+        wipe(liveEnemies)
+        wipe(friendlyState)
+        wipe(enemyCombatState)
+        wipe(recentAttackers)
+        ClearAllAlertBanners()
+    end
+    local shouldShowRadar = FW.settings.enableRadar and not suppressed
     local inCombat = InCombatLockdown and InCombatLockdown()
-    if not inCombat then
-        pendingRadarCombatRefresh = false
-        if not FW.settings.enableRadar then
-            radarFrame:Hide()
-            return
-        end
-        radarFrame:Show()
-    elseif not FW.settings.enableRadar then
-        pendingRadarCombatRefresh = true
+    if not shouldShowRadar then
+        radarFrame:Hide()
+        SyncRadarSecureButtons()
         return
     end
+    radarFrame:Show()
 
     local list = {}
+    local byKey = {}
     local dangerCount = 0
     local nemesisCount = 0
+    local isBgRadarOnly = FW.IsPvPInstanceRadarOnly()
     for key, snap in pairs(liveEnemies) do
         local rec = FW.FindEnemyRecord(key, snap.guid, snap.realm)
-        if rec or FW.settings.radarShowNormalEnemy then
+        if rec or FW.settings.radarShowNormalEnemy or isBgRadarOnly then
             if rec then
                 dangerCount = dangerCount + 1
                 if rec.isNemesis then nemesisCount = nemesisCount + 1 end
@@ -1775,8 +1962,10 @@ function FW.RefreshRadar()
             local score = 0
             if rec then
                 score = (rec.isNemesis and 1000 or 0) + (FW.GetDangerTier(rec).level * 100) + (rec.kills or 0)
+            elseif snap.discoveredDirect then
+                score = 10
             end
-            list[#list + 1] = {
+            local item = {
                 key = key,
                 class = snap.class or (rec and rec.class),
                 level = snap.level or (rec and rec.level) or 0,
@@ -1784,6 +1973,8 @@ function FW.RefreshRadar()
                 rec = rec,
                 score = score,
             }
+            list[#list + 1] = item
+            byKey[key] = item
         end
     end
 
@@ -1803,68 +1994,87 @@ function FW.RefreshRadar()
         radarFrame:SetBackdropBorderColor(0.75, 0.62, 0.30, 0.95)
     end
 
-    -- During combat lockdown, never Show/Hide/SetAttribute on secure rows; only refresh threat visuals in-place
-    if inCombat then
-        pendingRadarCombatRefresh = true
-        for i = 1, MAX_RADAR_ROWS do
-            local row = radarRows[i]
-            if row and row:IsShown() and row.entry then
-                local e = row.entry
-                local snap = liveEnemies[e.key] or e.snap
-                local rec = FW.FindEnemyRecord(e.key, snap and snap.guid, snap and snap.realm)
-                e.snap = snap
-                e.rec = rec
-                if snap and snap.class then e.class = snap.class elseif rec and rec.class then e.class = rec.class end
-                if snap and snap.level and snap.level > 0 then e.level = snap.level elseif rec and rec.level and rec.level > 0 then e.level = rec.level end
-                UpdateRadarRowVisuals(row, e)
-            end
-        end
-        return
-    end
-
     if FW.settings.radarCollapsed then
         radarFrame.emptyText:Hide()
         radarFrame.moreText:Hide()
         for i = 1, MAX_RADAR_ROWS do
             radarRows[i].entry = nil
-            radarRows[i]:SetAttribute("macrotext2", "")
             radarRows[i]:Hide()
         end
         radarFrame:SetHeight(35)
+        SyncRadarSecureButtons()
         return
     end
 
-    local shown = math.min(#list, MAX_RADAR_ROWS)
+    -- During combat lockdown, keep pre-bound secure button enemies pinned to their slots so right-click targeting stays accurate,
+    -- while immediately displaying newly discovered enemies in the remaining slots and expanding the radar frame downward in real time!
+    local displayList = list
+    if inCombat then
+        pendingRadarCombatRefresh = true
+        local pinned = {}
+        local usedKeys = {}
+        for i = 1, MAX_RADAR_ROWS do
+            local sbtn = radarSecureBtns[i]
+            local bKey = sbtn and sbtn:IsShown() and sbtn.boundKey or nil
+            if bKey and byKey[bKey] then
+                pinned[i] = byKey[bKey]
+                usedKeys[bKey] = true
+            end
+        end
+        if next(usedKeys) then
+            displayList = {}
+            local extras = {}
+            for _, item in ipairs(list) do
+                if not usedKeys[item.key] then
+                    extras[#extras + 1] = item
+                end
+            end
+            local extraIdx = 1
+            for i = 1, MAX_RADAR_ROWS do
+                if pinned[i] then
+                    displayList[i] = pinned[i]
+                elseif extras[extraIdx] then
+                    displayList[i] = extras[extraIdx]
+                    extraIdx = extraIdx + 1
+                end
+            end
+        end
+    end
+
+    local shown = 0
+    for i = 1, MAX_RADAR_ROWS do
+        if displayList[i] then
+            shown = i
+        end
+    end
+
     if shown == 0 then
         radarFrame.emptyText:Show()
         radarFrame.moreText:Hide()
         for i = 1, MAX_RADAR_ROWS do
             radarRows[i].entry = nil
-            radarRows[i]:SetAttribute("macrotext2", "")
             radarRows[i]:Hide()
         end
         radarFrame:SetHeight(60)
+        SyncRadarSecureButtons()
         return
     end
 
     radarFrame.emptyText:Hide()
     for i = 1, MAX_RADAR_ROWS do
         local row = radarRows[i]
-        local e = list[i]
+        local e = displayList[i]
         if e then
             row.entry = e
             UpdateRadarRowVisuals(row, e)
-            row:SetAttribute("type2", "macro")
-            row:SetAttribute("macrotext2", BuildTargetMacro(e))
             row:Show()
         else
             row.entry = nil
-            row:SetAttribute("macrotext2", "")
             row:Hide()
         end
     end
 
-    local extra = #list - shown
+    local extra = math.max(0, #list - shown)
     if extra > 0 then
         radarFrame.moreText:SetText(string.format(L.RADAR_MORE, extra))
         radarFrame.moreText:Show()
@@ -1873,6 +2083,8 @@ function FW.RefreshRadar()
         radarFrame.moreText:Hide()
         radarFrame:SetHeight(38 + shown * 23 + 6)
     end
+
+    SyncRadarSecureButtons()
 end
 
 local function ResolveEnemySnapshotByGUID(guid)
@@ -1983,7 +2195,10 @@ function FW.InitDangerMonitor()
     evFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
     evFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
     evFrame:RegisterEvent("PLAYER_DEAD")
+    evFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
     evFrame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+    pcall(evFrame.RegisterEvent, evFrame, "DUEL_INBOUNDS")
+    pcall(evFrame.RegisterEvent, evFrame, "DUEL_FINISHED")
     pcall(evFrame.RegisterEvent, evFrame, "PARTY_KILL")
     pcall(evFrame.RegisterEvent, evFrame, "UNIT_DIED")
     pcall(evFrame.RegisterEvent, evFrame, "CHAT_MSG_COMBAT_HOSTILE_DEATH")
@@ -2001,22 +2216,58 @@ function FW.InitDangerMonitor()
             return
         end
 
-        if not FW.settings or not FW.settings.enableMonitor then return end
+        if event == "DUEL_INBOUNDS" then
+            FW.inDuel = true
+            if FW.myKey then recentAttackers[FW.myKey] = nil end
+            return
+        elseif event == "DUEL_FINISHED" then
+            FW.inDuel = false
+            return
+        end
+
+        if event == "PLAYER_ENTERING_WORLD" or event == "ZONE_CHANGED_NEW_AREA" then
+            FW.inDuel = false
+            wipe(liveEnemies)
+            wipe(friendlyState)
+            wipe(enemyCombatState)
+            wipe(recentAttackers)
+            if FW.IsRadarSuppressed() or FW.IsPvPInstanceRadarOnly() then
+                ClearAllAlertBanners()
+            end
+            FW.RefreshRadar()
+            return
+        end
+
+        if not FW.IsRadarScanActive() then return end
 
         if event == "NAME_PLATE_UNIT_ADDED" then
-            ScanUnitAndTarget(arg1)
-            FW.ScheduleRadarRefresh()
+            if ScanUnitAndTarget(arg1) then
+                FW.ScheduleRadarRefresh()
+            end
+            return
 
         elseif event == "PLAYER_TARGET_CHANGED" then
-            ScanUnitAndTarget("target")
+            if ScanUnitAndTarget("target") then
+                FW.ScheduleRadarRefresh()
+            end
+            return
 
         elseif event == "PLAYER_FOCUS_CHANGED" then
-            ScanUnitAndTarget("focus")
+            if ScanUnitAndTarget("focus") then
+                FW.ScheduleRadarRefresh()
+            end
+            return
 
         elseif event == "UPDATE_MOUSEOVER_UNIT" then
-            ScanUnitAndTarget("mouseover")
+            if ScanUnitAndTarget("mouseover") then
+                FW.ScheduleRadarRefresh()
+            end
+            return
+        end
 
-        elseif event == "UNIT_TARGET" or event == "UNIT_HEALTH" or event == "UNIT_FLAGS" then
+        if not FW.IsMonitorActive() then return end
+
+        if event == "UNIT_TARGET" or event == "UNIT_HEALTH" or event == "UNIT_FLAGS" then
             if arg1 then
                 ScanUnitAndTarget(arg1)
             end
@@ -2148,13 +2399,6 @@ function FW.InitDangerMonitor()
 
         elseif event == "PLAYER_DEAD" then
             HandlePlayerDeath(0)
-
-        elseif event == "ZONE_CHANGED_NEW_AREA" then
-            wipe(liveEnemies)
-            wipe(friendlyState)
-            wipe(enemyCombatState)
-            wipe(recentAttackers)
-            FW.RefreshRadar()
         end
     end)
 

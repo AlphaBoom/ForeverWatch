@@ -47,6 +47,7 @@ ForeverWatch automatically monitors nearby hostile players, escalates threat & n
 | --- | --- |
 | `/fw` | Open the ForeverWatch Manager & Settings window |
 | `/fw stats` | Open the PvP Kill & Death Statistics tab |
+| `/fw monitor` | Toggle hostile auto-monitoring master switch |
 | `/fw radar` | Show or hide the nearby hostile radar panel |
 | `/fw lock` | Lock or unlock the floating radar panel |
 | `/fw tag [Name]` | Tag current target or specified player |

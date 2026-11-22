@@ -624,7 +624,7 @@ local function RefreshPvPDetailDialog()
 
     local classColored = FW.ColorizeName(FW.GetLocalizedClassName(classFile), classFile)
     detailDialog.headSub:SetText(string.format(L.DETAIL_IDENTITY_SUB,
-        FormatLevelBadge(level), classColored, realm ~= "" and realm or L.UNKNOWN))
+        FormatLevelBadge(level), classColored, FW.ColorizeName(FW.GetFullName(key), classFile)))
 
     -- 4 Mini H2H KPI cards
     detailDialog.miniKills.value:SetText(tostring(k))
@@ -1022,7 +1022,7 @@ local function RefreshTagDetailDialog()
     local lvl = (enemyRec and enemyRec.level and enemyRec.level ~= 0) and enemyRec.level
         or (pvpRec and pvpRec.level) or 0
     tagDetailDialog.headSub:SetText(string.format(L.DETAIL_IDENTITY_SUB,
-        FormatLevelBadge(lvl), clsStr, realm ~= "" and realm or L.UNKNOWN))
+        FormatLevelBadge(lvl), clsStr, FW.ColorizeName(FW.GetFullName(key), rec.class)))
 
     if rec.tags and #rec.tags > 0 then
         local chips = {}
@@ -2061,11 +2061,13 @@ local function CreateManagerUI()
 
     local opts = {
         { key = "enableMonitor",        text = L.OPT_MONITOR },
+        { key = "monitorNonWorldPvP",   text = L.OPT_MONITOR_NON_WPVP },
         { key = "enableBanner",         text = L.OPT_BANNER },
         { key = "enableSound",          text = L.OPT_SOUND },
         { key = "enableRadar",          text = L.OPT_RADAR },
         { key = "radarLocked",          text = L.OPT_RADAR_LOCK },
         { key = "radarShowNormalEnemy", text = L.OPT_RADAR_NORMAL },
+        { key = "showFullName",         text = L.OPT_SHOW_FULL_NAME },
         { key = "enableTooltipTags",    text = L.OPT_TOOLTIP },
         { key = "enableChatTags",       text = L.OPT_CHAT },
         { key = "enableNameplateIcon",  text = L.OPT_NAMEPLATE },
@@ -2073,8 +2075,8 @@ local function CreateManagerUI()
 
     for i, opt in ipairs(opts) do
         local cb = CreateFrame("CheckButton", nil, settingsPanel, "UICheckButtonTemplate")
-        cb:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 16, -8 - (i - 1) * 24)
-        cb:SetSize(22, 22)
+        cb:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 16, -6 - (i - 1) * 22)
+        cb:SetSize(21, 21)
         cb.key = opt.key
         local lbl = cb:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
         lbl:SetPoint("LEFT", cb, "RIGHT", 6, 0)
@@ -2088,14 +2090,14 @@ local function CreateManagerUI()
 
     local div1 = settingsPanel:CreateTexture(nil, "ARTWORK")
     div1:SetHeight(2)
-    div1:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 14, -228)
-    div1:SetPoint("TOPRIGHT", settingsPanel, "TOPRIGHT", -14, -228)
+    div1:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 14, -252)
+    div1:SetPoint("TOPRIGHT", settingsPanel, "TOPRIGHT", -14, -252)
     div1:SetTexture("Interface\\Common\\UI-TooltipDivider-Transparent")
     div1:SetVertexColor(0.85, 0.72, 0.35, 0.7)
 
     -- Tag Icon Style Picker
     local iconLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    iconLbl:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 18, -238)
+    iconLbl:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 18, -260)
     iconLbl:SetText(L.SET_ICON_STYLE)
 
     settingsPanel.iconButtons = {}
@@ -2122,7 +2124,7 @@ local function CreateManagerUI()
 
         local w = math.max(88, math.ceil(lbl:GetStringWidth() + 40))
         btn:SetWidth(w)
-        btn:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", ix, -256)
+        btn:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", ix, -278)
 
         btn:SetScript("OnClick", function(self)
             FW.settings.tagIconStyle = self.styleId
@@ -2135,7 +2137,7 @@ local function CreateManagerUI()
 
     -- Locked Radar Opacity Slider (20% - 100%)
     local alphaLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    alphaLbl:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 18, -292)
+    alphaLbl:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 18, -312)
     alphaLbl:SetText(L.SET_LOCKED_ALPHA)
 
     local alphaSlider = CreateFrame("Slider", "ForeverWatchLockedAlphaSlider", settingsPanel, "UISliderTemplate")
@@ -2162,7 +2164,7 @@ local function CreateManagerUI()
 
     -- Alert Banner Auto-Dismiss Duration Slider (2s - 15s)
     local durLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    durLbl:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 18, -322)
+    durLbl:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 18, -340)
     durLbl:SetText(L.SET_BANNER_DURATION)
 
     local durSlider = CreateFrame("Slider", "ForeverWatchBannerDurationSlider", settingsPanel, "UISliderTemplate")
@@ -2187,7 +2189,7 @@ local function CreateManagerUI()
 
     -- Radar Enemy Auto-Clear Timeout Slider (3s - 60s)
     local rtLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    rtLbl:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 18, -352)
+    rtLbl:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 18, -368)
     rtLbl:SetText(L.SET_RADAR_TIMEOUT)
 
     local rtSlider = CreateFrame("Slider", "ForeverWatchRadarTimeoutSlider", settingsPanel, "UISliderTemplate")
@@ -2215,7 +2217,7 @@ local function CreateManagerUI()
 
     -- Language Switcher (Auto / zhCN / zhTW / enUS) + Reload button
     local langLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    langLbl:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 18, -386)
+    langLbl:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 18, -398)
     langLbl:SetText(L.SET_LANGUAGE)
 
     settingsPanel.langButtons = {}
@@ -2243,7 +2245,7 @@ local function CreateManagerUI()
 
         local w = math.max(82, math.ceil(lbl:GetStringWidth() + 24))
         btn:SetWidth(w)
-        btn:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", lx, -404)
+        btn:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", lx, -416)
         btn:SetScript("OnClick", function(self)
             FW.SetLanguage(self.langId)
             RefreshSettingsTab()
@@ -2255,11 +2257,11 @@ local function CreateManagerUI()
     local reloadBtn = CreateWowButton(settingsPanel, L.SET_BTN_RELOAD, 84, 24, function()
         if ReloadUI then ReloadUI() end
     end)
-    reloadBtn:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", lx + 4, -405)
+    reloadBtn:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", lx + 4, -417)
 
     -- Preset tags customization
     local pLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    pLbl:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 18, -444)
+    pLbl:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 18, -452)
     pLbl:SetText(L.SET_PRESET_LABEL)
 
     local pBg, pInput = CreateBeveledSearchBox(settingsPanel, 492, 26)
@@ -2300,9 +2302,10 @@ local function CreateManagerUI()
 
     local resetPosBtn = CreateWowButton(settingsPanel, L.SET_BTN_RESET_POS, 142, 24, function()
         FW.settings.radarPoint = nil
-        if ForeverWatchRadarFrame and not (InCombatLockdown and InCombatLockdown()) then
+        if ForeverWatchRadarFrame then
             ForeverWatchRadarFrame:ClearAllPoints()
             ForeverWatchRadarFrame:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -24, -220)
+            if FW.RefreshRadar then FW.RefreshRadar() end
         end
         FW.Print(L.SET_POS_RESET_MSG)
     end)

@@ -2,7 +2,7 @@ local ADDON_NAME, FW = ...
 _G.ForeverWatch = FW
 local L = FW.L
 
-FW.version = "0.2.0"
+FW.version = "0.3.0"
 FW.prefix = "|cffFFD100[Forever|r|cffFF4444Watch]|r "
 
 -- Selectable crisp tag badge icon styles (HD Forever 16001 atlases & textures)
@@ -111,6 +111,7 @@ FW.DEFAULTS = {
     settings = {
         language            = "AUTO",
         enableMonitor       = true,
+        monitorNonWorldPvP  = false,
         enableSound         = true,
         enableBanner        = true,
         bannerDuration      = 5,
@@ -125,6 +126,7 @@ FW.DEFAULTS = {
         enableTooltipTags   = true,
         enableChatTags      = true,
         enableNameplateIcon = true,
+        showFullName        = false,
         tagIconStyle        = "PIN",
         alertCooldown       = 45,
         presetTags          = nil,
@@ -161,6 +163,7 @@ FW.myLastNameOrRealm = nil
 FW.mySpaceName = nil
 FW.myGUID = nil
 FW.myRealm = nil
+FW.inDuel = false
 
 -- ============================================================
 -- Secret Value Safety Helpers (Forever 16001 / 12.x Engine)
@@ -261,13 +264,22 @@ function FW.GetShortName(keyOrName)
     return keyOrName:match("^([^%-]+)") or keyOrName
 end
 
-function FW.GetDisplayName(keyOrName)
-    local short, realm = FW.SplitNameRealm(keyOrName)
+function FW.GetFullName(keyOrName)
+    local short, second = FW.SplitNameRealm(keyOrName)
     if not short then return tostring(keyOrName or "") end
     local myRealm = FW.GetMyRealm()
-    if realm and realm ~= "" and myRealm ~= "" and realm ~= myRealm then
-        return short .. "-" .. realm
+    if second and second ~= "" and second ~= myRealm then
+        return short .. " " .. second
     end
+    return short
+end
+
+function FW.GetDisplayName(keyOrName)
+    if FW.settings and FW.settings.showFullName then
+        return FW.GetFullName(keyOrName)
+    end
+    local short = FW.SplitNameRealm(keyOrName)
+    if not short then return tostring(keyOrName or "") end
     return short
 end
 
@@ -552,6 +564,91 @@ function FW.GetCurrentZoneText()
         z = GetZoneText and GetZoneText() or L.UNKNOWN_ZONE
     end
     return z
+end
+
+function FW.IsInPvPInstance()
+    if IsInInstance then
+        local ok, inInst, instType = pcall(IsInInstance)
+        if ok and inInst and (instType == "pvp" or instType == "arena") then
+            return true, instType
+        end
+    end
+    if C_PvP then
+        if C_PvP.IsArena then
+            local ok, isArena = pcall(C_PvP.IsArena)
+            if ok and FW.SafeBool(isArena) then
+                return true, "arena"
+            end
+        end
+        if C_PvP.IsBattleground then
+            local ok, isBG = pcall(C_PvP.IsBattleground)
+            if ok and FW.SafeBool(isBG) then
+                return true, "pvp"
+            end
+        end
+    end
+    if IsActiveBattlefieldArena then
+        local ok, isArena = pcall(IsActiveBattlefieldArena)
+        if ok and FW.SafeBool(isArena) then
+            return true, "arena"
+        end
+    end
+    return false, nil
+end
+
+function FW.IsInInstanceScene()
+    if IsInInstance then
+        local ok, inInst, instType = pcall(IsInInstance)
+        if ok and inInst and instType and instType ~= "none" then
+            return true, instType
+        end
+    end
+    return FW.IsInPvPInstance()
+end
+
+function FW.IsNonWorldPvPScene()
+    local inInst, instType = FW.IsInInstanceScene()
+    if inInst then
+        return true, instType
+    end
+    if FW.inDuel then
+        return true, "duel"
+    end
+    return false, nil
+end
+
+function FW.IsPvPInstanceRadarOnly()
+    if not FW.settings or not FW.settings.enableMonitor then
+        return false
+    end
+    if FW.settings.monitorNonWorldPvP then
+        return false
+    end
+    return FW.IsInPvPInstance() == true
+end
+
+function FW.IsRadarSuppressed()
+    if not FW.settings or not FW.settings.enableMonitor then
+        return true
+    end
+    if not FW.settings.monitorNonWorldPvP and FW.IsInInstanceScene() and not FW.IsInPvPInstance() then
+        return true
+    end
+    return false
+end
+
+function FW.IsMonitorActive()
+    if not FW.settings or not FW.settings.enableMonitor then
+        return false
+    end
+    if not FW.settings.monitorNonWorldPvP and FW.IsNonWorldPvPScene() then
+        return false
+    end
+    return true
+end
+
+function FW.IsRadarScanActive()
+    return FW.IsMonitorActive() or FW.IsPvPInstanceRadarOnly()
 end
 
 function FW.FormatKDRatio(kills, deaths, decimals)
@@ -1020,6 +1117,10 @@ SlashCmdList["FOREVERWATCH"] = function(msg)
         if FW.ShowManagerUI then
             FW.ShowManagerUI("stats")
         end
+    elseif cmd == "monitor" or cmd == "toggle" then
+        FW.settings.enableMonitor = not FW.settings.enableMonitor
+        FW.Print(string.format(L.CMD_MONITOR_TOGGLED, FW.settings.enableMonitor and ("|cff4CFF6B" .. L.ON .. "|r") or ("|cffFF4444" .. L.OFF .. "|r")))
+        FW.RefreshAllUI()
     elseif cmd == "radar" then
         FW.settings.enableRadar = not FW.settings.enableRadar
         FW.Print(string.format(L.CMD_RADAR_TOGGLED, FW.settings.enableRadar and ("|cff4CFF6B" .. L.ON .. "|r") or ("|cffFF4444" .. L.OFF .. "|r")))
@@ -1094,6 +1195,7 @@ SlashCmdList["FOREVERWATCH"] = function(msg)
         FW.Print(L.CMD_HELP_HEADER)
         FW.Print(L.CMD_HELP_OPEN)
         FW.Print(L.CMD_HELP_STATS)
+        FW.Print(L.CMD_HELP_MONITOR)
         FW.Print(L.CMD_HELP_RADAR)
         FW.Print(L.CMD_HELP_LOCK)
         FW.Print(L.CMD_HELP_TAG)

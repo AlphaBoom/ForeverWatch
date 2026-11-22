@@ -54,6 +54,7 @@ LOCALES.enUS = {
     },
 
     -- Slash Commands
+    CMD_MONITOR_TOGGLED = "Hostile auto-monitoring is now %s.",
     CMD_RADAR_TOGGLED = "Nearby Hostile Radar is now %s.",
     CMD_LOCK_TOGGLED = "Hostile Watch Radar is now %s.",
     LOCKED = "Locked (drag disabled, right-click targets)",
@@ -67,6 +68,7 @@ LOCALES.enUS = {
     CMD_HELP_HEADER = "Commands:",
     CMD_HELP_OPEN = "  |cffFFD100/fw|r - Open hostile monitor & player tags manager",
     CMD_HELP_STATS = "  |cffFFD100/fw stats|r - Open PvP kill & death statistics",
+    CMD_HELP_MONITOR = "  |cffFFD100/fw monitor|r - Toggle hostile auto-monitoring master switch",
     CMD_HELP_RADAR = "  |cffFFD100/fw radar|r - Toggle nearby hostile radar panel",
     CMD_HELP_LOCK = "  |cffFFD100/fw lock|r - Lock/unlock radar panel (right-click still targets when locked)",
     CMD_HELP_TAG = "  |cffFFD100/fw tag [Name]|r - Tag current target or specified friendly player",
@@ -259,7 +261,7 @@ LOCALES.enUS = {
 
     -- Opponent Detail Dialog
     DETAIL_TITLE = "Opponent PvP Details",
-    DETAIL_IDENTITY_SUB = "%s  ·  %s  ·  Realm: %s",
+    DETAIL_IDENTITY_SUB = "%s  ·  %s  ·  Full Name: %s",
     DETAIL_CARD_KILLS = "My Kills",
     DETAIL_CARD_DEATHS = "Killed Me",
     DETAIL_CARD_KD = "Head-to-Head K/D",
@@ -287,7 +289,8 @@ LOCALES.enUS = {
     TAG_DETAIL_BTN_PVP = "PvP Details",
 
     -- Settings Tab
-    OPT_MONITOR = "Enable automatic nearby hostile monitoring (attack / kill / nemesis escalation)",
+    OPT_MONITOR = "Enable automatic nearby hostile monitoring (master switch)",
+    OPT_MONITOR_NON_WPVP = "Auto-mark threats & track K/D outside World PvP (BG/Arena keeps radar-only when off)",
     OPT_BANNER = "Show screen alert banners for nearby threats and active attacks",
     OPT_SOUND = "Play alert sound notifications",
     OPT_RADAR = "Show draggable [Hostile Watch] floating radar panel",
@@ -296,6 +299,7 @@ LOCALES.enUS = {
     OPT_TOOLTIP = "Show tags, notes and threat info on unit & friends tooltips",
     OPT_CHAT = "Show player tags directly beside names in chat frames",
     OPT_NAMEPLATE = "Show compact marker icon beside nameplate names",
+    OPT_SHOW_FULL_NAME = "Display full two-part player names (First + Last Name)",
     SET_ICON_STYLE = "Tagged player marker icon style (Tooltip & NamePlate):",
     SET_LOCKED_ALPHA = "Locked radar panel opacity:",
     SET_BANNER_DURATION = "Alert banner auto-dismiss duration (2s ~ 15s):",
@@ -369,6 +373,7 @@ LOCALES.zhCN = {
     },
 
     -- Slash Commands
+    CMD_MONITOR_TOGGLED = "敌情自动监控已%s。",
     CMD_RADAR_TOGGLED = "附近敌情雷达窗口已%s。",
     CMD_LOCK_TOGGLED = "附近敌情悬浮框已%s。",
     LOCKED = "锁定（禁拖拽，可右键选中目标）",
@@ -382,6 +387,7 @@ LOCALES.zhCN = {
     CMD_HELP_HEADER = "命令列表:",
     CMD_HELP_OPEN = "  |cffFFD100/fw|r - 打开敌情监控与玩家标签管理窗口",
     CMD_HELP_STATS = "  |cffFFD100/fw stats|r - 打开击杀与被击杀战绩统计",
+    CMD_HELP_MONITOR = "  |cffFFD100/fw monitor|r - 开启/关闭敌情自动监控总开关",
     CMD_HELP_RADAR = "  |cffFFD100/fw radar|r - 显示/隐藏附近敌情监控小面板",
     CMD_HELP_LOCK = "  |cffFFD100/fw lock|r - 锁定/解锁敌情悬浮框（锁定后禁拖拽，仍可右键选中目标）",
     CMD_HELP_TAG = "  |cffFFD100/fw tag [玩家名]|r - 给目标或指定己方玩家打标签",
@@ -574,7 +580,7 @@ LOCALES.zhCN = {
 
     -- Opponent Detail Dialog
     DETAIL_TITLE = "对手交手详情",
-    DETAIL_IDENTITY_SUB = "%s  ·  %s  ·  服务器: %s",
+    DETAIL_IDENTITY_SUB = "%s  ·  %s  ·  全名: %s",
     DETAIL_CARD_KILLS = "我方击杀",
     DETAIL_CARD_DEATHS = "被其击杀",
     DETAIL_CARD_KD = "交手 K/D",
@@ -602,7 +608,8 @@ LOCALES.zhCN = {
     TAG_DETAIL_BTN_PVP = "查看交手详情",
 
     -- Settings Tab
-    OPT_MONITOR = "开启周围敌对玩家自动监控（攻击/击杀/仇人自动升级）",
+    OPT_MONITOR = "开启周围敌对玩家自动监控（总开关）",
+    OPT_MONITOR_NON_WPVP = "世界 PvP 以外场景也自动标记与统计（未勾选时战场/竞技场仅保留雷达）",
     OPT_BANNER = "危险人物 / 仇人出现或行凶时弹出屏幕中央预警横幅",
     OPT_SOUND = "预警时播放提示音效",
     OPT_RADAR = "显示可拖拽的【附近敌情监控】悬浮小面板",
@@ -611,6 +618,7 @@ LOCALES.zhCN = {
     OPT_TOOLTIP = "在玩家 Tooltip 与好友列表中显示标签、备注与危险等级",
     OPT_CHAT = "在聊天栏玩家名字旁直接显示已打的标签",
     OPT_NAMEPLATE = "在姓名板名字旁显示简洁标记符号（标牌/双剑/骷髅）",
+    OPT_SHOW_FULL_NAME = "显示玩家完整两段式全名（Forever 名 + 姓）",
     SET_ICON_STYLE = "已打标签玩家标记图标样式（Tooltip 与姓名板生效）：",
     SET_LOCKED_ALPHA = "锁定后悬浮框透明度（20% ~ 100%）：",
     SET_BANNER_DURATION = "预警横幅自动消失时间（2秒 ~ 15秒）：",
@@ -684,6 +692,7 @@ LOCALES.zhTW = {
     },
 
     -- Slash Commands
+    CMD_MONITOR_TOGGLED = "敵情自動監控已%s。",
     CMD_RADAR_TOGGLED = "附近敵情雷達視窗已%s。",
     CMD_LOCK_TOGGLED = "附近敵情懸浮框已%s。",
     LOCKED = "鎖定（禁拖拽，可右鍵選取目標）",
@@ -697,6 +706,7 @@ LOCALES.zhTW = {
     CMD_HELP_HEADER = "指令列表:",
     CMD_HELP_OPEN = "  |cffFFD100/fw|r - 開啟敵情監控與玩家標籤管理視窗",
     CMD_HELP_STATS = "  |cffFFD100/fw stats|r - 開啟擊殺與被擊殺戰績統計",
+    CMD_HELP_MONITOR = "  |cffFFD100/fw monitor|r - 開啟/關閉敵情自動監控總開關",
     CMD_HELP_RADAR = "  |cffFFD100/fw radar|r - 顯示/隱藏附近敵情監控小面板",
     CMD_HELP_LOCK = "  |cffFFD100/fw lock|r - 鎖定/解鎖敵情懸浮框（鎖定後禁拖拽，仍可右鍵選取目標）",
     CMD_HELP_TAG = "  |cffFFD100/fw tag [玩家名]|r - 給目標或指定己方玩家打標籤",
@@ -889,7 +899,7 @@ LOCALES.zhTW = {
 
     -- Opponent Detail Dialog
     DETAIL_TITLE = "對手交手詳情",
-    DETAIL_IDENTITY_SUB = "%s  ·  %s  ·  伺服器: %s",
+    DETAIL_IDENTITY_SUB = "%s  ·  %s  ·  全名: %s",
     DETAIL_CARD_KILLS = "我方擊殺",
     DETAIL_CARD_DEATHS = "被其擊殺",
     DETAIL_CARD_KD = "交手 K/D",
@@ -917,7 +927,8 @@ LOCALES.zhTW = {
     TAG_DETAIL_BTN_PVP = "查看交手詳情",
 
     -- Settings Tab
-    OPT_MONITOR = "開啟周圍敵對玩家自動監控（攻擊/擊殺/仇人自動升級）",
+    OPT_MONITOR = "開啟周圍敵對玩家自動監控（總開關）",
+    OPT_MONITOR_NON_WPVP = "世界 PvP 以外場景也自動標記與統計（未勾選時戰場/競技場僅保留雷達）",
     OPT_BANNER = "危險人物 / 仇人出現或行兇時彈出螢幕中央預警橫幅",
     OPT_SOUND = "預警時播放提示音效",
     OPT_RADAR = "顯示可拖拽的【附近敵情監控】懸浮小面板",
@@ -926,6 +937,7 @@ LOCALES.zhTW = {
     OPT_TOOLTIP = "在玩家 Tooltip 與好友列表中顯示標籤、備註與危險等級",
     OPT_CHAT = "在聊天欄玩家名字旁直接顯示已打的標籤",
     OPT_NAMEPLATE = "在姓名板名字旁顯示簡潔標記符號（標牌/雙劍/骷髏）",
+    OPT_SHOW_FULL_NAME = "顯示玩家完整兩段式全名（Forever 名 + 姓）",
     SET_ICON_STYLE = "已打標籤玩家標記圖示樣式（Tooltip 與姓名板生效）：",
     SET_LOCKED_ALPHA = "鎖定後懸浮框透明度（20% ~ 100%）：",
     SET_BANNER_DURATION = "預警橫幅自動消失時間（2秒 ~ 15秒）：",
