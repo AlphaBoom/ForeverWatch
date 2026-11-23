@@ -562,8 +562,9 @@ local function PlayThrottledAlertSound(rec, priority)
     end
 end
 
-function FW.ShowAlertBanner(enemyName, classFile, rec, reason, priority)
+function FW.ShowAlertBanner(enemyName, classFile, rec, reason, priority, forceShow)
     if not FW.settings.enableBanner then return end
+    if not forceShow and rec and not FW.ShouldAlertForEnemy(rec) then return end
 
     for i = 1, MAX_ALERT_SLOTS do
         if not alertBanners[i] then
@@ -639,7 +640,7 @@ function FW.TriggerMultiAlertTest()
     }
     for i, s in ipairs(samples) do
         C_Timer.After((i - 1) * 0.25, function()
-            FW.ShowAlertBanner(s.name, s.class, s.rec, s.reason, s.prio)
+            FW.ShowAlertBanner(s.name, s.class, s.rec, s.reason, s.prio, true)
         end)
     end
 end
@@ -663,12 +664,12 @@ function FW.RecordEnemyAction(snapshot, actionType, victimName)
     local shouldAlert = false
 
     if actionType == "attack" then
-        local throttleKey = rec.key .. ":" .. (victimName or "")
-        if not lastAttackRecord[throttleKey] or (now - lastAttackRecord[throttleKey]) >= 10 then
+        local throttleKey = rec.key
+        if not lastAttackRecord[throttleKey] or (now - lastAttackRecord[throttleKey]) >= 30 then
             lastAttackRecord[throttleKey] = now
             rec.attacks = (rec.attacks or 0) + 1
             rec.lastEvent = victimName and string.format(L.ALERT_EVENT_ATTACK_NAMED, victimName) or L.ALERT_EVENT_ATTACK_GENERIC
-            if isNew or not lastProximityAlert[rec.key] or (now - lastProximityAlert[rec.key]) >= 20 then
+            if FW.ShouldAlertForEnemy(rec) and (isNew or not lastProximityAlert[rec.key] or (now - lastProximityAlert[rec.key]) >= 20) then
                 lastProximityAlert[rec.key] = now
                 reason = victimName and string.format(L.ALERT_ATTACK_NAMED, victimName) or L.ALERT_ATTACK_GENERIC
                 priority = rec.isNemesis and 4 or 2
@@ -684,9 +685,11 @@ function FW.RecordEnemyAction(snapshot, actionType, victimName)
             and string.format(L.ALERT_TIER_UP, newTier.level, newTier.name)
             or string.format(L.ALERT_TOTAL_KILLS, rec.kills)
         reason = (victimName and string.format(L.ALERT_KILL_PREFIX_NAMED, victimName) or L.ALERT_KILL_PREFIX_GENERIC) .. tierMsg
-        lastProximityAlert[rec.key] = now
-        priority = rec.isNemesis and 5 or 3
-        shouldAlert = true
+        if FW.ShouldAlertForEnemy(rec) then
+            lastProximityAlert[rec.key] = now
+            priority = rec.isNemesis and 5 or 3
+            shouldAlert = true
+        end
 
         FW.Print(string.format("%s %s %s",
             FW.GetDangerLabel(rec),
@@ -763,6 +766,8 @@ local function TriggerProximityCheck(snap)
     rec.lastSeen = time()
     rec.lastZone = GetZoneTextSafe()
 
+    if not FW.ShouldAlertForEnemy(rec) then return end
+
     local now = GetTime()
     local cd = FW.settings.alertCooldown or 45
     if not lastProximityAlert[rec.key] or (now - lastProximityAlert[rec.key]) >= cd then
@@ -790,7 +795,7 @@ local function InspectFriendlyUnit(unit)
         hpDropped = true
     end
 
-    if isSelf and not dead and hpDropped and FW.myKey then
+    if isSelf and not dead and hpDropped and FW.myKey and FW.SafeBool(FW.SafeUnitCall(UnitAffectingCombat, "player")) then
         for _, eSnap in pairs(liveEnemies) do
             if (now - eSnap.lastSeen) <= 4 and eSnap.inCombat and eSnap.targetKey == FW.myKey then
                 NoteRecentAttacker(FW.myKey, info.name, eSnap, "hp_drop")
@@ -1034,13 +1039,12 @@ local function InspectEnemyUnit(unit)
     TriggerProximityCheck(snap)
 
     -- Infer active attack on friendly player:
-    -- Enemy is in combat + targeting a living friendly player who is also in combat
-    -- and either HP dropped, or enemy is actively casting, or sustained lock >= 1.2s
+    -- Require both enemy and friendly target to be in combat AND the friendly target's HP dropped
+    -- (prevents false positives from out-of-combat buffing/shapeshifting or two players fighting separate mobs)
     if inCombat and targetInfo and not IsUnitDeadSafe(targetUnit) then
         local targetInCombat = FW.SafeBool(FW.SafeUnitCall(UnitAffectingCombat, targetUnit))
-        local casting = FW.SafeUnitCall(UnitCastingInfo, unit) ~= nil or FW.SafeUnitCall(UnitChannelInfo, unit) ~= nil
-        if casting or (targetInCombat and (targetHpDropped or (now - targetSince) >= 1.2)) then
-            NoteRecentAttacker(targetInfo.key, targetInfo.name, snap, casting and "cast" or "combat_lock")
+        if targetInCombat and targetHpDropped then
+            NoteRecentAttacker(targetInfo.key, targetInfo.name, snap, "combat_hp_drop")
         end
     end
 
@@ -2280,11 +2284,14 @@ function FW.InitDangerMonitor()
                         MarkEnemyEngagedByMe(snap)
                     end
                 end
-            elseif arg1 and IsEnemyPlayerUnit(arg1) then
+            elseif (event == "UNIT_SPELLCAST_START" or event == "UNIT_SPELLCAST_CHANNEL_START") and arg1 and IsEnemyPlayerUnit(arg1) then
                 local snap = InspectEnemyUnit(arg1)
-                if snap then
+                if snap and snap.inCombat then
                     local tUnit = arg1 .. "target"
-                    if IsFriendlyPlayerUnit(tUnit) and not IsUnitDeadSafe(tUnit) then
+                    if IsFriendlyPlayerUnit(tUnit)
+                        and not IsUnitDeadSafe(tUnit)
+                        and FW.SafeBool(FW.SafeUnitCall(UnitAffectingCombat, tUnit))
+                    then
                         local tInfo = FW.GetUnitIdentity(tUnit)
                         if tInfo then
                             NoteRecentAttacker(tInfo.key, tInfo.name, snap, "spellcast")
@@ -2296,7 +2303,7 @@ function FW.InitDangerMonitor()
         elseif event == "UNIT_COMBAT" then
             -- arg1 = unit, arg2 = action ("WOUND", "HEAL", "DODGE", etc.)
             if arg1 and FW.CanAccess(arg2) and arg2 == "WOUND" then
-                if IsFriendlyPlayerUnit(arg1) then
+                if IsFriendlyPlayerUnit(arg1) and FW.SafeBool(FW.SafeUnitCall(UnitAffectingCombat, arg1)) then
                     local fInfo = InspectFriendlyUnit(arg1)
                     if fInfo then
                         if FW.IsPlayerSelf(arg1, fInfo) then
@@ -2388,10 +2395,12 @@ function FW.InitDangerMonitor()
             if FW.myKey then
                 local now = GetTime()
                 for _, snap in pairs(liveEnemies) do
-                    local targetingNow = (now - snap.lastSeen) <= 3 and snap.inCombat and snap.targetKey == FW.myKey
+                    local targetingNow = (now - snap.lastSeen) <= 1.5 and snap.inCombat and snap.targetKey == FW.myKey
                     local targetedRecently = snap.lastTargetedMe and (now - snap.lastTargetedMe) <= 3
-                    if targetingNow or targetedRecently then
+                    if targetingNow then
                         NoteRecentAttacker(FW.myKey, FW.myShortName, snap, "engage_me")
+                        MarkEnemyEngagedByMe(snap, now)
+                    elseif targetedRecently then
                         MarkEnemyEngagedByMe(snap, now)
                     end
                 end

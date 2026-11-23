@@ -2,7 +2,7 @@ local ADDON_NAME, FW = ...
 _G.ForeverWatch = FW
 local L = FW.L
 
-FW.version = "0.3.0"
+FW.version = "0.3.1"
 FW.prefix = "|cffFFD100[Forever|r|cffFF4444Watch]|r "
 
 -- Selectable crisp tag badge icon styles (HD Forever 16001 atlases & textures)
@@ -114,6 +114,7 @@ FW.DEFAULTS = {
         monitorNonWorldPvP  = false,
         enableSound         = true,
         enableBanner        = true,
+        minAlertTier        = 1,
         bannerDuration      = 5,
         enableRadar         = true,
         radarTimeout        = 18,
@@ -440,6 +441,16 @@ function FW.GetDangerColor(rec)
         return tier.r, tier.g, tier.b, tier.hex
     end
     return 1, 0.67, 0, "FFAA00"
+end
+
+function FW.ShouldAlertForEnemy(rec)
+    if not rec then return false end
+    local minTier = tonumber(FW.settings and FW.settings.minAlertTier) or 1
+    if minTier <= 1 then return true end
+    if rec.isNemesis then return true end
+    if minTier > #FW.DANGER_TIERS then return false end
+    local tier = FW.GetDangerTier(rec)
+    return tier ~= nil and tier.level >= minTier
 end
 
 function FW.RebuildIndexes()
@@ -1187,7 +1198,7 @@ SlashCmdList["FOREVERWATCH"] = function(msg)
                     kills = 4,
                     killedMe = 1,
                     attacks = 5,
-                }, L.TEST_SINGLE_REASON, 5)
+                }, L.TEST_SINGLE_REASON, 5, true)
             end
             FW.Print(L.CMD_TEST_SINGLE)
         end

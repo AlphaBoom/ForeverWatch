@@ -1693,6 +1693,31 @@ local function RefreshSettingsTab()
     for _, cb in ipairs(panel.checkboxes) do
         cb:SetChecked(FW.settings[cb.key] == true)
     end
+    if panel.alertTierButtons then
+        local activeTier = tonumber(FW.settings.minAlertTier) or 1
+        local maxTier = #FW.DANGER_TIERS + 1
+        if activeTier < 1 then activeTier = 1 elseif activeTier > maxTier then activeTier = maxTier end
+        for _, btn in ipairs(panel.alertTierButtons) do
+            if btn.tierLevel == activeTier then
+                btn:SetBackdropColor(btn.tierR * 0.35, btn.tierG * 0.35, btn.tierB * 0.35, 0.96)
+                btn:SetBackdropBorderColor(btn.tierR, btn.tierG, btn.tierB, 1.0)
+                btn.label:SetTextColor(1, 0.95, 0.85)
+            else
+                btn:SetBackdropColor(0.12, 0.12, 0.15, 0.88)
+                btn:SetBackdropBorderColor(0.45, 0.40, 0.32, 0.85)
+                btn.label:SetTextColor(btn.tierR, btn.tierG, btn.tierB)
+            end
+        end
+        if panel.alertTierValueText then
+            if activeTier > #FW.DANGER_TIERS then
+                local ns = FW.NEMESIS_STYLE
+                panel.alertTierValueText:SetText(string.format("|cff%s%s|r", ns.hex, L.SET_ALERT_TIER_NEMESIS_ONLY))
+            else
+                local t = FW.DANGER_TIERS[activeTier]
+                panel.alertTierValueText:SetText(string.format("|cff%s" .. L.SET_ALERT_TIER_FMT .. "|r", t.hex, t.level, t.name))
+            end
+        end
+    end
     if panel.iconButtons then
         local activeStyle = FW.settings.tagIconStyle or "PIN"
         for _, btn in ipairs(panel.iconButtons) do
@@ -1780,9 +1805,11 @@ local function CreateScrollArea(parent, topOffset)
     return sf, child, empty
 end
 
+local MANAGER_MAX_HEIGHT = 560
+
 local function CreateManagerUI()
     local f = CreateFrame("Frame", "ForeverWatchManagerFrame", UIParent, "ButtonFrameTemplate")
-    f:SetSize(660, 666)
+    f:SetSize(660, MANAGER_MAX_HEIGHT)
     f:SetPoint("CENTER", UIParent, "CENTER", 0, 20)
     f:SetFrameStrata("HIGH")
     f:SetClampedToScreen(true)
@@ -2059,6 +2086,17 @@ local function CreateManagerUI()
     f.settingsPanel = settingsPanel
     settingsPanel.checkboxes = {}
 
+    local settingsScroll = CreateFrame("ScrollFrame", "ForeverWatchSettingsScrollFrame", settingsPanel, "UIPanelScrollFrameTemplate")
+    settingsScroll:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 6, -6)
+    settingsScroll:SetPoint("BOTTOMRIGHT", settingsPanel, "BOTTOMRIGHT", -28, 46)
+
+    local settingsContent = CreateFrame("Frame", nil, settingsScroll)
+    settingsContent:SetWidth(604)
+    settingsContent:SetHeight(564)
+    settingsScroll:SetScrollChild(settingsContent)
+    settingsPanel.scrollFrame = settingsScroll
+    settingsPanel.scrollChild = settingsContent
+
     local opts = {
         { key = "enableMonitor",        text = L.OPT_MONITOR },
         { key = "monitorNonWorldPvP",   text = L.OPT_MONITOR_NON_WPVP },
@@ -2074,8 +2112,8 @@ local function CreateManagerUI()
     }
 
     for i, opt in ipairs(opts) do
-        local cb = CreateFrame("CheckButton", nil, settingsPanel, "UICheckButtonTemplate")
-        cb:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 16, -6 - (i - 1) * 22)
+        local cb = CreateFrame("CheckButton", nil, settingsContent, "UICheckButtonTemplate")
+        cb:SetPoint("TOPLEFT", settingsContent, "TOPLEFT", 10, -4 - (i - 1) * 22)
         cb:SetSize(21, 21)
         cb.key = opt.key
         local lbl = cb:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -2088,22 +2126,87 @@ local function CreateManagerUI()
         settingsPanel.checkboxes[i] = cb
     end
 
-    local div1 = settingsPanel:CreateTexture(nil, "ARTWORK")
+    local div1 = settingsContent:CreateTexture(nil, "ARTWORK")
     div1:SetHeight(2)
-    div1:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 14, -252)
-    div1:SetPoint("TOPRIGHT", settingsPanel, "TOPRIGHT", -14, -252)
+    div1:SetPoint("TOPLEFT", settingsContent, "TOPLEFT", 8, -250)
+    div1:SetPoint("TOPRIGHT", settingsContent, "TOPRIGHT", -8, -250)
     div1:SetTexture("Interface\\Common\\UI-TooltipDivider-Transparent")
     div1:SetVertexColor(0.85, 0.72, 0.35, 0.7)
 
+    -- Minimum Danger Tier for Alerts (Lv.1 .. Lv.5 + Nemesis Only)
+    local alertTierLbl = settingsContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    alertTierLbl:SetPoint("TOPLEFT", settingsContent, "TOPLEFT", 12, -258)
+    alertTierLbl:SetText(L.SET_MIN_ALERT_TIER)
+
+    settingsPanel.alertTierButtons = {}
+    local alertTierDefs = {}
+    for _, t in ipairs(FW.DANGER_TIERS) do
+        tinsert(alertTierDefs, {
+            level = t.level,
+            shortText = t.level < #FW.DANGER_TIERS and ("Lv." .. t.level .. "+") or ("Lv." .. t.level),
+            ttTitle = string.format("|cff%sLv.%d %s|r", t.hex, t.level, t.name),
+            ttDesc = string.format(L.SET_ALERT_TIER_TT_KILLS, t.minKills),
+            r = t.r, g = t.g, b = t.b,
+        })
+    end
+    tinsert(alertTierDefs, {
+        level = #FW.DANGER_TIERS + 1,
+        shortText = L.SET_ALERT_TIER_NEMESIS_ONLY,
+        ttTitle = string.format("|cff%s%s|r", FW.NEMESIS_STYLE.hex, L.SET_ALERT_TIER_NEMESIS_ONLY),
+        ttDesc = L.SET_ALERT_TIER_TT_NEMESIS,
+        r = FW.NEMESIS_STYLE.r, g = FW.NEMESIS_STYLE.g, b = FW.NEMESIS_STYLE.b,
+    })
+
+    local ax = 12
+    for i, def in ipairs(alertTierDefs) do
+        local btn = CreateFrame("Button", nil, settingsContent, "BackdropTemplate")
+        btn:SetHeight(24)
+        btn:SetBackdrop({
+            bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 10,
+            insets = { left = 2, right = 2, top = 2, bottom = 2 },
+        })
+        local lbl = btn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        lbl:SetPoint("CENTER", 0, 0)
+        lbl:SetText(def.shortText)
+        btn.label = lbl
+        btn.tierLevel = def.level
+        btn.tierR, btn.tierG, btn.tierB = def.r, def.g, def.b
+
+        local w = math.max(52, math.ceil(lbl:GetStringWidth() + 18))
+        btn:SetWidth(w)
+        btn:SetPoint("TOPLEFT", settingsContent, "TOPLEFT", ax, -276)
+
+        btn:SetScript("OnClick", function(self)
+            FW.settings.minAlertTier = self.tierLevel
+            RefreshSettingsTab()
+        end)
+        btn:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:SetText(def.ttTitle)
+            GameTooltip:AddLine(def.ttDesc, 0.85, 0.85, 0.85, true)
+            GameTooltip:Show()
+        end)
+        btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+        settingsPanel.alertTierButtons[i] = btn
+        ax = ax + w + 6
+    end
+
+    local alertTierValueText = settingsContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    alertTierValueText:SetPoint("LEFT", settingsContent, "TOPLEFT", ax + 6, -288)
+    settingsPanel.alertTierValueText = alertTierValueText
+
     -- Tag Icon Style Picker
-    local iconLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    iconLbl:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 18, -260)
+    local iconLbl = settingsContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    iconLbl:SetPoint("TOPLEFT", settingsContent, "TOPLEFT", 12, -308)
     iconLbl:SetText(L.SET_ICON_STYLE)
 
     settingsPanel.iconButtons = {}
-    local ix = 18
+    local ix = 12
     for i, style in ipairs(FW.TAG_ICON_STYLES) do
-        local btn = CreateFrame("Button", nil, settingsPanel, "BackdropTemplate")
+        local btn = CreateFrame("Button", nil, settingsContent, "BackdropTemplate")
         btn:SetHeight(26)
         btn:SetBackdrop({
             bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
@@ -2124,7 +2227,7 @@ local function CreateManagerUI()
 
         local w = math.max(88, math.ceil(lbl:GetStringWidth() + 40))
         btn:SetWidth(w)
-        btn:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", ix, -278)
+        btn:SetPoint("TOPLEFT", settingsContent, "TOPLEFT", ix, -326)
 
         btn:SetScript("OnClick", function(self)
             FW.settings.tagIconStyle = self.styleId
@@ -2136,18 +2239,18 @@ local function CreateManagerUI()
     end
 
     -- Locked Radar Opacity Slider (20% - 100%)
-    local alphaLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    alphaLbl:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 18, -312)
+    local alphaLbl = settingsContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    alphaLbl:SetPoint("TOPLEFT", settingsContent, "TOPLEFT", 12, -360)
     alphaLbl:SetText(L.SET_LOCKED_ALPHA)
 
-    local alphaSlider = CreateFrame("Slider", "ForeverWatchLockedAlphaSlider", settingsPanel, "UISliderTemplate")
+    local alphaSlider = CreateFrame("Slider", "ForeverWatchLockedAlphaSlider", settingsContent, "UISliderTemplate")
     alphaSlider:SetSize(220, 18)
     alphaSlider:SetPoint("LEFT", alphaLbl, "RIGHT", 12, 0)
     alphaSlider:SetMinMaxValues(20, 100)
     alphaSlider:SetValueStep(5)
     alphaSlider:SetObeyStepOnDrag(true)
 
-    local alphaValueText = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    local alphaValueText = settingsContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     alphaValueText:SetPoint("LEFT", alphaSlider, "RIGHT", 10, 0)
     alphaValueText:SetText("55%")
 
@@ -2163,18 +2266,18 @@ local function CreateManagerUI()
     settingsPanel.alphaValueText = alphaValueText
 
     -- Alert Banner Auto-Dismiss Duration Slider (2s - 15s)
-    local durLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    durLbl:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 18, -340)
+    local durLbl = settingsContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    durLbl:SetPoint("TOPLEFT", settingsContent, "TOPLEFT", 12, -388)
     durLbl:SetText(L.SET_BANNER_DURATION)
 
-    local durSlider = CreateFrame("Slider", "ForeverWatchBannerDurationSlider", settingsPanel, "UISliderTemplate")
+    local durSlider = CreateFrame("Slider", "ForeverWatchBannerDurationSlider", settingsContent, "UISliderTemplate")
     durSlider:SetSize(220, 18)
     durSlider:SetPoint("LEFT", durLbl, "RIGHT", 12, 0)
     durSlider:SetMinMaxValues(2, 15)
     durSlider:SetValueStep(1)
     durSlider:SetObeyStepOnDrag(true)
 
-    local durValueText = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    local durValueText = settingsContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     durValueText:SetPoint("LEFT", durSlider, "RIGHT", 10, 0)
     durValueText:SetText(string.format(L.SEC_FMT, 5))
 
@@ -2188,18 +2291,18 @@ local function CreateManagerUI()
     settingsPanel.durationValueText = durValueText
 
     -- Radar Enemy Auto-Clear Timeout Slider (3s - 60s)
-    local rtLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    rtLbl:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 18, -368)
+    local rtLbl = settingsContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    rtLbl:SetPoint("TOPLEFT", settingsContent, "TOPLEFT", 12, -416)
     rtLbl:SetText(L.SET_RADAR_TIMEOUT)
 
-    local rtSlider = CreateFrame("Slider", "ForeverWatchRadarTimeoutSlider", settingsPanel, "UISliderTemplate")
+    local rtSlider = CreateFrame("Slider", "ForeverWatchRadarTimeoutSlider", settingsContent, "UISliderTemplate")
     rtSlider:SetSize(220, 18)
     rtSlider:SetPoint("LEFT", rtLbl, "RIGHT", 12, 0)
     rtSlider:SetMinMaxValues(3, 60)
     rtSlider:SetValueStep(1)
     rtSlider:SetObeyStepOnDrag(true)
 
-    local rtValueText = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    local rtValueText = settingsContent:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     rtValueText:SetPoint("LEFT", rtSlider, "RIGHT", 10, 0)
     rtValueText:SetText(string.format(L.SEC_FMT, 18))
 
@@ -2216,8 +2319,8 @@ local function CreateManagerUI()
     settingsPanel.radarTimeoutValueText = rtValueText
 
     -- Language Switcher (Auto / zhCN / zhTW / enUS) + Reload button
-    local langLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    langLbl:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 18, -398)
+    local langLbl = settingsContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    langLbl:SetPoint("TOPLEFT", settingsContent, "TOPLEFT", 12, -446)
     langLbl:SetText(L.SET_LANGUAGE)
 
     settingsPanel.langButtons = {}
@@ -2227,9 +2330,9 @@ local function CreateManagerUI()
         { id = "zhTW", text = L.LANG_ZHTW },
         { id = "enUS", text = L.LANG_ENUS },
     }
-    local lx = 18
+    local lx = 12
     for i, ldef in ipairs(langDefs) do
-        local btn = CreateFrame("Button", nil, settingsPanel, "BackdropTemplate")
+        local btn = CreateFrame("Button", nil, settingsContent, "BackdropTemplate")
         btn:SetHeight(26)
         btn:SetBackdrop({
             bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
@@ -2245,7 +2348,7 @@ local function CreateManagerUI()
 
         local w = math.max(82, math.ceil(lbl:GetStringWidth() + 24))
         btn:SetWidth(w)
-        btn:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", lx, -416)
+        btn:SetPoint("TOPLEFT", settingsContent, "TOPLEFT", lx, -464)
         btn:SetScript("OnClick", function(self)
             FW.SetLanguage(self.langId)
             RefreshSettingsTab()
@@ -2254,21 +2357,21 @@ local function CreateManagerUI()
         lx = lx + w + 8
     end
 
-    local reloadBtn = CreateWowButton(settingsPanel, L.SET_BTN_RELOAD, 84, 24, function()
+    local reloadBtn = CreateWowButton(settingsContent, L.SET_BTN_RELOAD, 84, 24, function()
         if ReloadUI then ReloadUI() end
     end)
-    reloadBtn:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", lx + 4, -417)
+    reloadBtn:SetPoint("TOPLEFT", settingsContent, "TOPLEFT", lx + 4, -465)
 
     -- Preset tags customization
-    local pLbl = settingsPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    pLbl:SetPoint("TOPLEFT", settingsPanel, "TOPLEFT", 18, -452)
+    local pLbl = settingsContent:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    pLbl:SetPoint("TOPLEFT", settingsContent, "TOPLEFT", 12, -500)
     pLbl:SetText(L.SET_PRESET_LABEL)
 
-    local pBg, pInput = CreateBeveledSearchBox(settingsPanel, 492, 26)
+    local pBg, pInput = CreateBeveledSearchBox(settingsContent, 476, 26)
     pBg:SetPoint("TOPLEFT", pLbl, "BOTTOMLEFT", 0, -6)
     settingsPanel.presetInput = pInput
 
-    local pSave = CreateWowButton(settingsPanel, L.SET_BTN_SAVE_PRESET, 90, 26, function()
+    local pSave = CreateWowButton(settingsContent, L.SET_BTN_SAVE_PRESET, 90, 26, function()
         local parsed = FW.ParseTagString(pInput:GetText() or "")
         if #parsed > 0 and not FW.IsDefaultPresetList(parsed) then
             FW.settings.presetTags = parsed
@@ -2281,7 +2384,14 @@ local function CreateManagerUI()
     end)
     pSave:SetPoint("LEFT", pBg, "RIGHT", 8, 0)
 
-    -- Bottom action buttons inside Settings
+    -- Fixed footer divider & bottom action buttons inside Settings
+    local divBottom = settingsPanel:CreateTexture(nil, "ARTWORK")
+    divBottom:SetHeight(2)
+    divBottom:SetPoint("BOTTOMLEFT", settingsPanel, "BOTTOMLEFT", 14, 44)
+    divBottom:SetPoint("BOTTOMRIGHT", settingsPanel, "BOTTOMRIGHT", -14, 44)
+    divBottom:SetTexture("Interface\\Common\\UI-TooltipDivider-Transparent")
+    divBottom:SetVertexColor(0.85, 0.72, 0.35, 0.7)
+
     local testBtn = CreateWowButton(settingsPanel, L.SET_BTN_TEST_SINGLE, 118, 24, function()
         FW.ShowAlertBanner(L.TEST_SINGLE_NAME, "ROGUE", {
             key = "TestEnemySingle-Test",
@@ -2289,9 +2399,9 @@ local function CreateManagerUI()
             kills = 5,
             killedMe = 1,
             attacks = 6,
-        }, L.TEST_SINGLE_REASON, 5)
+        }, L.TEST_SINGLE_REASON, 5, true)
     end)
-    testBtn:SetPoint("BOTTOMLEFT", settingsPanel, "BOTTOMLEFT", 18, 16)
+    testBtn:SetPoint("BOTTOMLEFT", settingsPanel, "BOTTOMLEFT", 18, 12)
 
     local testMultiBtn = CreateWowButton(settingsPanel, L.SET_BTN_TEST_MULTI, 142, 24, function()
         if FW.TriggerMultiAlertTest then
